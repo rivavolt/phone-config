@@ -1,42 +1,37 @@
-#!/bin/bash
-set -e
+#!/usr/bin/env -S uv run --script --quiet
+# /// script
+# dependencies = [
+#   "sh",
+# ]
+# ///
 
-STATE_FILE="$HOME/.local/state/termux-packages.txt"
-PACKAGES_FILE="packages.txt"
+import pickle, os
+from pathlib import Path
+import sh
 
-[ -z "$TERMUX_HOST" ] && { echo "Error: TERMUX_HOST not set" >&2; exit 1; }
+def load_cache(f): 
+    try: return pickle.loads(f.read_bytes())
+    except: return set()
 
-mkdir -p "$(dirname "$STATE_FILE")"
+def save_cache(f, data):
+    f.parent.mkdir(exist_ok=True)
+    f.write_bytes(pickle.dumps(data))
 
-ssh "$TERMUX_HOST" "pkg list-installed | grep -v automatic | cut -d/ -f1" | sort > "$STATE_FILE.new"
+def load_packages(f):
+    return set(f.read_text().strip().split()) if f.exists() else set()
 
-if [ -f "$STATE_FILE" ]; then
-    NEW_PKGS=$(comm -13 "$STATE_FILE" "$STATE_FILE.new")
-    REMOVED_PKGS=$(comm -23 "$STATE_FILE" "$STATE_FILE.new")
-else
-    NEW_PKGS=$(cat "$STATE_FILE.new")
-    REMOVED_PKGS=""
-fi
+host = os.environ['TERMUX_HOST']
+cache_file = Path.home() / '.cache/termux-packages.pkl'
+packages_file = Path('packages.txt')
 
-if [ -n "$NEW_PKGS" ]; then
-    if [ -f "$PACKAGES_FILE" ]; then
-        echo "$NEW_PKGS" | comm -23 - <(sort "$PACKAGES_FILE") | cat - "$PACKAGES_FILE" | sort > "$PACKAGES_FILE.tmp"
-        mv "$PACKAGES_FILE.tmp" "$PACKAGES_FILE"
-    else
-        echo "$NEW_PKGS" > "$PACKAGES_FILE"
-    fi
+current = set(sh.ssh(host, 'pkg list-installed | grep -v automatic | cut -d/ -f1').split())
+previous = load_cache(cache_file)
+local = load_packages(packages_file)
 
-    echo "Added $(echo "$NEW_PKGS" | wc -l | tr -d ' ') new package(s):"
-    echo "$NEW_PKGS" | sed 's/^/  + /'
-fi
+new, removed = current - previous, previous - current
 
-if [ -n "$REMOVED_PKGS" ] && [ -f "$PACKAGES_FILE" ]; then
-    echo "$REMOVED_PKGS" | while read -r pkg; do
-        sed -i '' "/^$pkg$/d" "$PACKAGES_FILE"
-    done
+if new | removed:
+    packages_file.write_text('\n'.join(sorted((local | new) - removed)))
+    print(f"±{len(new)}/{len(removed)}")
 
-    echo "Removed $(echo "$REMOVED_PKGS" | wc -l | tr -d ' ') package(s):"
-    echo "$REMOVED_PKGS" | sed 's/^/  - /'
-fi
-
-mv "$STATE_FILE.new" "$STATE_FILE"
+save_cache(cache_file, current)
