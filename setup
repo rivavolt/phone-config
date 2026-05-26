@@ -1,18 +1,91 @@
-#!/bin/bash
+#!/usr/bin/env bash
+# Idempotent Termux bootstrap. Safe to re-run anytime.
+#
+# Each step guards on "already done" by inspecting state (file content, symlink
+# existence, sv status, etc.), not by catching errors. Termux has no atomic
+# upgrades or rollback — this is as close to declarative as plain pkg allows.
 
-pkg update -y
+set -euo pipefail
 
-xargs -a packages.txt pkg install -y
+cd "$(dirname "$0")"
+ROOT=$(pwd)
 
-pkg install -y zsh && chsh -s zsh
+# shellcheck source=lib/log.sh
+source "$ROOT/lib/log.sh"
+# shellcheck source=lib/packages.sh
+source "$ROOT/lib/packages.sh"
+# shellcheck source=lib/manual-install.sh
+source "$ROOT/lib/manual-install.sh"
+# shellcheck source=lib/shell.sh
+source "$ROOT/lib/shell.sh"
+# shellcheck source=lib/ssh.sh
+source "$ROOT/lib/ssh.sh"
+# shellcheck source=lib/services.sh
+source "$ROOT/lib/services.sh"
 
-ssh-keygen -A
+[ -n "${PREFIX:-}" ] || die "PREFIX unset — run inside Termux"
 
-cat > $PREFIX/etc/ssh/sshd_config.d/auth.conf << 'SSH_CONFIG'
-PasswordAuthentication no
-SSH_CONFIG
+log "1. packages (apt)"
+packages_apply "$ROOT/packages.txt"
 
-pkg install termux-services
+log "2. manual installs (binary-fetched tools not in any repo)"
+manual_install_all
 
-sv-enable sshd
-sv up sshd
+log "3. login shell"
+shell_set_zsh
+
+log "4. ssh host keys"
+ssh_host_keys
+
+log "5. authorized_keys"
+ssh_authorized_keys "$ROOT/authorized_keys"
+
+log "6. sshd config drop-in"
+ssh_drop_in "$ROOT/sshd_config.d/listen.conf" listen.conf
+
+log "7. termux-services (sshd)"
+service_enable sshd
+service_up sshd
+
+log "8. boot script"
+boot_script "$ROOT/.termux/boot/start-sshd" start-sshd
+# Stale boot script from an earlier overhaul; canonical is start-sshd (no .sh).
+if [ -f "$HOME/.termux/boot/start-sshd.sh" ]; then
+  do_ "removing stale ~/.termux/boot/start-sshd.sh"
+  rm -f "$HOME/.termux/boot/start-sshd.sh"
+  ok "stale boot script removed"
+fi
+
+log "verify"
+errs=0
+
+if sv status sshd 2>/dev/null | grep -q '^run:'; then
+  ok "sshd process running ($(sv status sshd | sed 's/^run: sshd: //'))"
+else
+  warn "sshd not running"; errs=$((errs+1))
+fi
+
+if [ -s "$HOME/.ssh/authorized_keys" ]; then
+  n=$(grep -c '^ssh-' "$HOME/.ssh/authorized_keys" || true)
+  ok "authorized_keys has $n entries"
+else
+  warn "authorized_keys empty"; errs=$((errs+1))
+fi
+
+if grep -q '^Port 8022' "$PREFIX/etc/ssh/sshd_config.d/listen.conf" 2>/dev/null; then
+  ok "sshd configured for port 8022"
+else
+  warn "sshd port config missing"; errs=$((errs+1))
+fi
+
+if compgen -G "$PREFIX/etc/ssh/ssh_host_*_key" >/dev/null; then
+  ok "host keys present"
+else
+  warn "host keys missing"; errs=$((errs+1))
+fi
+
+if [ "$errs" -eq 0 ]; then
+  log "all checks passed"
+else
+  die "$errs verification check(s) failed"
+fi
