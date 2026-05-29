@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# SSH setup: host keys, authorized_keys, and the sshd_config.d drop-in.
+# SSH setup: host keys, authorized_keys, the client config, and the
+# sshd_config.d drop-in.
 
 ssh_host_keys() {
   local dir="$PREFIX/etc/ssh"
@@ -26,6 +27,23 @@ ssh_authorized_keys() {
     do_ "writing $dst"
     install -m 600 "$src" "$dst"
     ok "authorized_keys updated"
+  fi
+}
+
+ssh_client_config() {
+  local src="$1"
+  [ -f "$src" ] || die "ssh client config source missing: $src"
+
+  mkdir -p "$HOME/.ssh"
+  chmod 700 "$HOME/.ssh"
+
+  local dst="$HOME/.ssh/config"
+  if [ -f "$dst" ] && cmp -s "$src" "$dst"; then
+    skip "ssh client config up to date"
+  else
+    do_ "writing $dst"
+    install -m 600 "$src" "$dst"
+    ok "ssh client config updated"
   fi
 }
 

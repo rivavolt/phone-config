@@ -1,0 +1,36 @@
+Host *
+    Compression yes
+    ServerAliveInterval 30
+    ServerAliveCountMax 4
+
+Host riva
+    HostName riva.tail.avolt.net
+    User andrei
+
+Host watts
+    HostName watts.tail.avolt.net
+    User andrei
+
+Host id
+    HostName id.tail.avolt.net
+    User andrei
+
+Host watch
+    HostName watch.tail.avolt.net
+    User andrei
+
+Host gate
+    HostName gate.tail.avolt.net
+    User andrei
+
+Host volt
+    HostName volt.tail.avolt.net
+    User andrei
+
+Host mac
+    HostName mac.tail.avolt.net
+    User andrei
+
+Host surface
+    HostName surface.tail.avolt.net
+    User sve

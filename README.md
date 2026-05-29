@@ -10,6 +10,7 @@ re-runnable any time.
 ├── setup                       idempotent entrypoint
 ├── packages.txt                pkg names, one per line (termux-main + tur-repo)
 ├── authorized_keys             pubkeys for ~/.ssh/authorized_keys (generated)
+├── ssh_config                  vendored ~/.ssh/config (outbound host aliases)
 ├── sshd_config.d/listen.conf   drop-in for $PREFIX/etc/ssh/sshd_config.d/
 ├── sync-keys                   regen authorized_keys from nixos-config
 ├── sync-packages               diff installed-on-phone vs packages.txt

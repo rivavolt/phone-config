@@ -40,6 +40,9 @@ ssh_host_keys
 log "5. authorized_keys"
 ssh_authorized_keys "$ROOT/authorized_keys"
 
+log "5b. ssh client config"
+ssh_client_config "$ROOT/ssh_config"
+
 log "6. sshd config drop-in"
 ssh_drop_in "$ROOT/sshd_config.d/listen.conf" listen.conf
 
