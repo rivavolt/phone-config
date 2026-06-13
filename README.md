@@ -10,8 +10,9 @@ re-runnable any time.
 ├── setup                       idempotent entrypoint
 ├── packages.txt                pkg names, one per line (termux-main + tur-repo)
 ├── authorized_keys             pubkeys for ~/.ssh/authorized_keys (generated)
-├── ssh_config                  vendored ~/.ssh/config (outbound host aliases)
+├── ssh_config                  ~/.ssh/config (generated — see sync-config)
 ├── sshd_config.d/listen.conf   drop-in for $PREFIX/etc/ssh/sshd_config.d/
+├── sync-config                 regen ssh_config from nixos-config
 ├── sync-keys                   regen authorized_keys from nixos-config
 ├── sync-packages               diff installed-on-phone vs packages.txt
 ├── lib/                        bash modules sourced by setup
@@ -55,6 +56,19 @@ port 8022 configured, host keys present. Failure is reported and exits non-zero.
 
 `sync-keys` reads `userKeys` from `ssh-keys.nix` via awk (no nix evaluator
 required) and rewrites `authorized_keys`. The phone key itself is excluded.
+
+## Updating the ssh client config
+
+`ssh_config` (the phone's `~/.ssh/config`) is generated, not hand-edited. Its
+single source of truth is nixos-config's `phone-ssh-config` generator, which
+derives the fleet host blocks from `modules/shared/ssh-keys.nix` and folds in the
+`Host *` keepalives, the `surface` host, and the tailnet catch-all.
+
+To regenerate after a host change: on a dev box, `cd ~/dev/termux-setup &&
+./sync-config`, then commit + push and `git pull && bash setup` on the phone.
+`sync-config` shells out to nix (unlike `sync-keys`) because the config layout
+lives in the generator. The same generator can also push the file straight to the
+phone over tailnet SSH with `phone-ssh-config` (no checkout/pull needed).
 
 ## Boot persistence
 
