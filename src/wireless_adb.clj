@@ -6,25 +6,12 @@
   Termux:Boot hook that re-runs it. The bootstrap authenticates with the fleet
   adb client key the phone authorized over USB, so no pairing dialog is ever
   involved; onboard seeds that key."
-  (:require [engine :refer [defstep]]
-            [transport :refer [adb ssh ssh-ok? files-current? sync-files]]))
+  (:require [engine :refer [step!]]
+            [transport :refer [repo-file files-step settings-step]]))
 
-(defstep :wireless-debugging "wireless debugging enabled"
-  :check (when (adb "shell" "true")
-           (= "1" (:out (adb "shell" "settings" "get" "global" "adb_wifi_enabled"))))
-  :apply! (adb "shell" "settings" "put" "global" "adb_wifi_enabled" "1"))
+(step! (settings-step :wireless-debugging "wireless debugging enabled"
+                      [["global" "adb_wifi_enabled" "1"]]))
 
-(def payload [["termux-adb-bootstrap" "$PREFIX/bin/termux-adb-bootstrap" "755"]])
-
-(defstep :adb-bootstrap "termux-adb-bootstrap current"
-  :check (files-current? payload)
-  :apply! (sync-files payload))
-
-(defstep :adb-boot-hook "bootstrap re-runs at every boot"
-  :check (or (not (ssh-ok? "test -f ~/.android/adbkey"))
-             (ssh-ok? "test -x ~/.termux/boot/10-adb-bootstrap"))
-  :apply! (ssh (str "mkdir -p ~/.termux/boot; "
-                    "printf '%s\\n' '#!/data/data/com.termux/files/usr/bin/sh' "
-                    "'termux-wake-lock 2>/dev/null || true' 'termux-adb-bootstrap' "
-                    "'termux-wake-unlock 2>/dev/null || true' > ~/.termux/boot/10-adb-bootstrap; "
-                    "chmod 755 ~/.termux/boot/10-adb-bootstrap")))
+(step! (files-step :adb-bootstrap "bootstrap + boot hook current"
+                   #(vector [(repo-file "termux-adb-bootstrap")        "$PREFIX/bin/termux-adb-bootstrap"  "755"]
+                            [(repo-file ".termux/boot/10-adb-bootstrap") "~/.termux/boot/10-adb-bootstrap" "755"])))

@@ -3,12 +3,26 @@
   Termux:Boot APKs, the fleet adb client key, wireless debugging, adbd pinned
   to TCP 5555. Everything runs through `run-as com.termux` (Termux debug
   builds are debuggable), so no phone UI beyond the Tailscale sign-in."
-  (:require [transport :refer [repo sh-out]]
+  (:require [transport :refer [sh-out]]
+            [nixos-config]
             [babashka.process :as p]
             [babashka.fs :as fs]
             [clojure.string :as str]))
 
-(defn- b64 [path] (str/trim (:out (sh-out "base64" "-w0" path))))
+(defn- b64 [path] (:out (sh-out "base64" "-w0" path)))
+
+(defn- install-apk
+  "Install pkg from a GitHub release over adb. Play Protect blocks some APKs
+  (Termux:Boot) over plain adb install, so the verifier can be toggled for
+  just that install."
+  [a pkg gh-repo pattern & {:keys [verifier-off]}]
+  (when-not (zero? (:exit (a "shell" "pm" "path" pkg)))
+    (println "== installing" pkg)
+    (let [tmp (str (fs/create-temp-dir))]
+      (p/shell "gh" "release" "download" "--repo" gh-repo "--pattern" pattern "-D" tmp)
+      (when verifier-off (a "shell" "settings" "put" "global" "verifier_verify_adb_installs" "0"))
+      (a "install" "-r" (str (first (fs/glob tmp "*.apk"))))
+      (when verifier-off (a "shell" "settings" "delete" "global" "verifier_verify_adb_installs")))))
 
 (defn run
   [serial]
@@ -24,22 +38,8 @@
       (println "  adb logcat -d | grep -o 'hs.avolt.net/register/[A-Za-z0-9]*'")
       (println "  ssh amp -- sudo headscale nodes register -u andrei -k <key>")
       (System/exit 1))
-    (when-not (zero? (:exit (a "shell" "pm" "path" "com.termux")))
-      (println "== installing Termux APK")
-      (let [tmp (str (fs/create-temp-dir))]
-        (p/shell "gh" "release" "download" "--repo" "termux/termux-app"
-                 "--pattern" "*arm64-v8a.apk" "-D" tmp)
-        (a "install" "-r" (str (first (fs/glob tmp "*.apk"))))))
-    (when-not (zero? (:exit (a "shell" "pm" "path" "com.termux.boot")))
-      ;; the Boot APK fails Play Protect verification over adb — toggle the
-      ;; verifier for just this install
-      (println "== installing Termux:Boot APK")
-      (let [tmp (str (fs/create-temp-dir))]
-        (p/shell "gh" "release" "download" "--repo" "termux/termux-boot"
-                 "--pattern" "*.apk" "-D" tmp)
-        (a "shell" "settings" "put" "global" "verifier_verify_adb_installs" "0")
-        (a "install" "-r" (str (first (fs/glob tmp "*.apk"))))
-        (a "shell" "settings" "delete" "global" "verifier_verify_adb_installs")))
+    (install-apk a "com.termux" "termux/termux-app" "*arm64-v8a.apk")
+    (install-apk a "com.termux.boot" "termux/termux-boot" "*.apk" :verifier-off true)
     (a "shell" "am" "start" "-n" "com.termux/.app.TermuxActivity")
     (println "== waiting for Termux bootstrap")
     (loop []
@@ -57,7 +57,7 @@
     (println "== ssh + core packages")
     (run-as "command -v sshd >/dev/null || pkg install -y openssh python")
     (run-as "mkdir -p $HOME/.ssh; chmod 700 $HOME/.ssh")
-    (run-as (str "echo " (b64 (str repo "/authorized_keys"))
+    (run-as (str "echo " (b64 @nixos-config/authorized-keys-file)
                  " | base64 -d > $HOME/.ssh/authorized_keys; chmod 600 $HOME/.ssh/authorized_keys"))
     (run-as "pgrep -x sshd >/dev/null || sshd")
     (a "shell" "am" "start" "-n" "com.termux.boot/.BootActivity")

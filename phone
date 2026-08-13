@@ -9,43 +9,46 @@
 ;;   phone verify [device]   check only, exit non-zero on drift
 ;;   phone adopt  [device]   fold the device's manual pkg installs into packages.txt
 ;;   phone onboard <serial>  first contact over USB adb, then: phone apply
-(require '[engine] '[transport])
+(require '[engine] '[transport] '[nixos-config] '[onboard])
 
-(def devices
-  {"pixel8"   {:ssh "u0_a366@pixel8.tail.avolt.net"
-               :adb "pixel8.tail.avolt.net:5555"}
-   "nothing1" {:ssh "u0_a779@nothing1.tail.avolt.net"
-               :adb "nothing1.tail.avolt.net:5555"}})
+;; the Termux uid is the only per-device datum; everything else derives from
+;; the name (which must match the machine's entry in nixos-config's
+;; flake/machines.nix, androidDevice = true)
+(def devices {"pixel8" "u0_a366", "nothing1" "u0_a779"})
 
 ;; policy files; registration order is execution order
-(require '[android16-exec] '[always-on-vpn] '[wireless-adb] '[termux-boot] '[sshd] '[userland])
+(require '[android16-exec] '[always-on-vpn] '[airplane-radios] '[wireless-adb] '[termux-boot] '[sshd] '[userland])
 
 (defn- with-device [name f]
-  (let [dev (or (devices (or name "pixel8"))
-                (do (println "unknown device:" name) (System/exit 1)))]
+  (let [name (or name "pixel8")
+        uid (or (devices name) (do (println "unknown device:" name) (System/exit 1)))
+        dev {:ssh (str uid "@" name ".tail.avolt.net")
+             :adb (str name ".tail.avolt.net:5555")}]
     (binding [transport/*dev* dev]
       (when-not (transport/ssh-ok? "true")
         (println "unreachable over ssh:" (:ssh dev)) (System/exit 1))
-      (f dev))))
+      (f name dev))))
 
 (let [[cmd arg] *command-line-args*]
   (case cmd
     "onboard"
-    (do (require '[onboard])
-        ((resolve 'onboard/run)
-         (or arg (do (println "usage: phone onboard <adb-serial>") (System/exit 1)))))
+    (onboard/run (or arg (do (println "usage: phone onboard <adb-serial>") (System/exit 1))))
 
     "adopt"
-    (with-device arg (fn [_] (userland/adopt)))
+    (with-device arg (fn [_ _] (userland/adopt)))
 
     ("apply" "verify")
     (with-device arg
-      (fn [dev]
-        (println (format "== %s %s (%s)" cmd (or arg "pixel8") (:ssh dev)))
-        (engine/converge {:check-only (= cmd "verify")})
-        (when (pos? @engine/failures)
-          (println @engine/failures "step(s) failed/drifted") (System/exit 1))
-        (println "converged")))
+      (fn [name dev]
+        (println (format "== %s %s (%s)" cmd name (:ssh dev)))
+        ;; renders take seconds of nix; overlap them with the early steps
+        (future (try @nixos-config/authorized-keys-file @nixos-config/ssh-config-file
+                     (catch Exception _)))
+        (let [fails (engine/converge {:check-only (= cmd "verify")
+                                      :probes {:adb transport/adb-plane-up?}})]
+          (when (pos? fails)
+            (println fails "step(s) failed/drifted") (System/exit 1))
+          (println "converged"))))
 
     (do (println "usage: phone {apply|verify|adopt} [device] | phone onboard <serial>")
         (System/exit 1))))

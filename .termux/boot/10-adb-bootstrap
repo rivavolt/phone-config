@@ -1,0 +1,4 @@
+#!/data/data/com.termux/files/usr/bin/sh
+termux-wake-lock 2>/dev/null || true
+termux-adb-bootstrap
+termux-wake-unlock 2>/dev/null || true

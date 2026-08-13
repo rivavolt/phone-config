@@ -24,10 +24,11 @@ src/engine.clj              step registry + converge loop (check → apply → r
 src/transport.clj           ssh / adb / content-addressed file push
 src/android16_exec.clj      workaround with a sunset — delete the file when upstream fixes it
 src/always_on_vpn.clj       policy: the tailnet survives reboots (lockdown OFF, with why)
+src/airplane_radios.clj     policy: airplane mode spares wifi + bluetooth
 src/wireless_adb.clj        policy: adb reachable across reboots (toggle + bootstrap + hook)
 src/termux_boot.clj         policy: boot hooks actually fire (Boot APK + doze exemptions)
 src/sshd.clj                policy: reachable over ssh (keys, config, supervision, hook)
-src/userland.clj            policy: the dev environment (packages, zsh, uv, doctl/gcloud/pnpm)
+src/userland.clj            policy: the dev environment (packages, zsh, ui config, doctl/gcloud/pnpm)
 src/nixos_config.clj        the nixos-config seam: authorized_keys + ssh_config rendered
                             fresh at apply time — never vendored
 src/onboard.clj             USB first-contact flow (runs before ssh exists)
