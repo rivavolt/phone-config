@@ -1,117 +1,86 @@
 # termux-setup
 
-Idempotent Termux bootstrap. Vendored pubkeys + sshd config + package list,
-re-runnable any time.
+Desired state for the fleet's Android phones, converged from a workstation.
+The phone is a target, not a runtime: `phone` (babashka) drives everything
+over ssh (Termux plane, port 8022) and adb (Android plane), checks state
+before mutating, and re-running is always safe. The only things living
+on-device are the pushed payload files — notably the Termux:Boot hooks,
+which must work at boot with no host around.
+
+## Usage
+
+```
+./phone apply  [device]    converge (default: pixel8)
+./phone verify [device]    check only, exit non-zero on drift
+./phone onboard <serial>   first contact over USB adb, then: phone apply
+```
 
 ## Layout
 
 ```
-.
-├── setup                       idempotent entrypoint
-├── packages.txt                pkg names, one per line (termux-main + tur-repo)
-├── authorized_keys             pubkeys for ~/.ssh/authorized_keys (generated)
-├── ssh_config                  ~/.ssh/config (generated — see sync-config)
-├── sshd_config.d/listen.conf   drop-in for $PREFIX/etc/ssh/sshd_config.d/
-├── sync-config                 regen ssh_config from nixos-config
-├── sync-keys                   regen authorized_keys from nixos-config
-├── sync-packages               diff installed-on-phone vs packages.txt
-├── lib/                        bash modules sourced by setup
-│   └── manual-install.sh       binary-fetched tools missing from any repo
-│                               (doctl, gcloud, pnpm)
-├── onboard                     host-side zero-UI onboarding of a NEW phone over USB adb
-├── termux-adb-bootstrap        re-pins adbd to TCP 5555 (vendored from nixos-config)
-└── .termux/boot/start-sshd     installed into ~/.termux/boot/ for Termux:Boot
+phone                       entry: device table + CLI dispatch
+src/engine.clj              step registry + converge loop (check → apply → re-check)
+src/transport.clj           ssh / adb / content-addressed file push
+src/android16_exec.clj      workaround with a sunset — delete the file when upstream fixes it
+src/android.clj             Android-plane state: settings, doze whitelist (over adb)
+src/termux.clj              Termux-plane state: packages, shell, sshd, payload files,
+                            services, uv tools, binary-fetched tools (over ssh)
+src/onboard.clj             USB first-contact flow (runs before ssh exists)
+packages.txt                pkg names, one per line (termux-main + tur-repo)
+authorized_keys             pubkeys for ~/.ssh/authorized_keys (generated — sync-keys)
+ssh_config                  the phone's ~/.ssh/config (generated — sync-config)
+sshd_config.d/listen.conf   drop-in for $PREFIX/etc/ssh/sshd_config.d/
+termux-adb-bootstrap        re-pins adbd to TCP 5555 (runs on-device at boot)
+.termux/boot/start-sshd     Termux:Boot hook: supervised sshd
+sync-keys / sync-config     regenerate the two generated files from nixos-config
+sync-packages               diff installed-on-phone vs packages.txt
 ```
 
-## First-time install
+Steps live in per-concern files; registration order is execution order,
+declared once in `phone`. Workarounds get their own file named for the
+specific problem (`android16_exec.clj`), never a shared bucket — the filename
+carries the sunset, and deleting the file is the whole change when it arrives.
 
-Preferred: from a workstation, phone on USB with adb authorized — no phone UI
-beyond the Tailscale sign-in:
+## Onboarding a new phone
 
-```
-./onboard <adb-serial>
-```
-
-`onboard` drives the whole thing over `run-as com.termux` (Termux debug builds
-are debuggable): installs the Termux + Termux:Boot APKs from GitHub releases
-(disabling the Play Protect adb-install verifier for just the Boot APK),
-pins always-on VPN to Tailscale (lockdown off), seeds the fleet adb client key
-into Termux's `~/.android` — the phone already authorized it over USB, so the
-wireless-debug connect needs NO pairing dialog, ever — clones this repo, runs
-`setup`, enables wireless debugging, and pins adbd to TCP 5555.
-
-Manual fallback, on the phone in Termux:
+Plug it in with adb authorized, sign Tailscale in against https://hs.avolt.net
+(the one UI step), register the node server-side, then:
 
 ```
-pkg install -y git
-git clone https://github.com/andreivolt/termux-setup.git
-cd termux-setup
-bash setup
+./phone onboard <adb-serial>   # Termux APKs, fleet adb key, wireless debugging
+./phone apply <device>         # after adding the device to the table in ./phone
 ```
 
-`setup` installs every package in `packages.txt`, switches the login shell to
-zsh, generates host keys, writes `~/.ssh/authorized_keys` from the vendored
-file, drops `listen.conf` into `sshd_config.d/`, enables + starts sshd via
-termux-services, installs the boot scripts (sshd + the adb 5555 bootstrap),
-and reinstalls the uv tools from `~/.config/uv-tools.txt`.
+`onboard` drives Termux through `run-as com.termux` (debug builds are
+debuggable). The Termux:Boot APK fails Play Protect verification over adb, so
+the verifier is toggled off for just that install. The fleet adb client key it
+seeds is already authorized (it authorized over USB), so the wireless-debug
+connect needs no pairing dialog, ever.
 
-Ordering trap: `adb tcpip 5555` restarts adbd, which kills anything started
-via `run-as` over that same transport — a just-started sshd included. On some
-devices (Pixel 8) the 5555 bind also dies on USB unplug, not just reboot;
-recovery without a cable is a reboot (Termux:Boot) or
-`ssh -p 8022 <phone> termux-adb-bootstrap`.
+Ordering trap, learned the hard way: `adb tcpip 5555` restarts adbd, which
+kills anything started via `run-as` over that same transport — a just-started
+sshd included. It is deliberately the last thing onboard does. On some devices
+(Pixel 8) the 5555 bind also dies on USB unplug, not just reboot; recovery
+without a cable is a reboot (Termux:Boot re-runs the bootstrap) or
+`ssh -p 8022 <device> termux-adb-bootstrap`.
 
-Re-open Termux for the zsh change to take effect.
-
-## Re-running
-
-`bash setup` is safe to run any time. Every step inspects state before
-mutating — packages already installed are skipped, an enabled service stays
-enabled, an up-to-date config file isn't touched.
-
-The verify pass at the end checks: sshd running, authorized_keys non-empty,
-port 8022 configured, host keys present. Failure is reported and exits non-zero.
-
-## Adding a new device pubkey
+## Adding a device pubkey
 
 1. Add it to `~/dev/nixos-config/modules/shared/ssh-keys.nix` under `userKeys`.
-2. On a dev box (riva/watts/mac): `cd ~/dev/termux-setup && ./sync-keys`.
-3. Commit + push. On the phone: `git pull && bash setup`.
+2. `./sync-keys`, commit, `./phone apply <device>` per phone.
 
-`sync-keys` reads `userKeys` from `ssh-keys.nix` via awk (no nix evaluator
-required) and rewrites `authorized_keys`. The phone key itself is excluded.
-
-## Updating the ssh client config
-
-`ssh_config` (the phone's `~/.ssh/config`) is generated, not hand-edited. Its
-single source of truth is nixos-config's `phone-ssh-config` generator, which
-derives the fleet host blocks from `modules/shared/ssh-keys.nix` and folds in the
-`Host *` keepalives, the `surface` host, and the tailnet catch-all.
-
-To regenerate after a host change: on a dev box, `cd ~/dev/termux-setup &&
-./sync-config`, then commit + push and `git pull && bash setup` on the phone.
-`sync-config` shells out to nix (unlike `sync-keys`) because the config layout
-lives in the generator. The same generator can also push the file straight to the
-phone over tailnet SSH with `phone-ssh-config` (no checkout/pull needed).
-
-## Boot persistence
-
-`bash setup` installs `~/.termux/boot/start-sshd`, but that only fires on boot
-if you also install the **Termux:Boot** APK (F-Droid / GitHub releases). APKs
-can't be installed from inside Termux, hence the manual step.
+`sync-config` regenerates `ssh_config` the same way (it shells out to nix;
+`sync-keys` is plain awk).
 
 ## Termux vs NixOS — what you give up
 
-- No atomic upgrades. `pkg update` mutates in place; if a package upgrade
-  breaks something, there's no generation to roll back to.
+- No atomic upgrades. `pkg update` mutates in place; no generation to roll
+  back to.
 - No version pinning. `packages.txt` lists names only — you always get
   whatever's current in the Termux repo.
-- No declarative service supervision beyond runit's symlinks; service config
-  itself (sshd_config.d, etc.) is the only declarative surface.
 - No reproducible userland — `$HOME` mutations from interactive use are not
   tracked.
 
-Within those limits, the setup is structured to: (a) live in a repo so changes
-are auditable, (b) be safely re-runnable so drift is recoverable by re-applying,
-(c) source pubkeys from the same `ssh-keys.nix` that nixos hosts use, so a new
-device propagates to phone with one edit + `sync-keys` + push.
+Within those limits: desired state lives in a repo, converging is one
+re-runnable command, and drift is visible (`phone verify`) rather than
+discovered.
