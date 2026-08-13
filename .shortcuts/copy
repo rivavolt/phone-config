@@ -1,1 +1,5 @@
-termux-clipboard-get | ssh mac pbcopy
+clipboard=$(termux-clipboard-get)
+echo "$clipboard" | ssh mac pbcopy &
+echo "$clipboard" | ssh watts wl-copy &
+echo "$clipboard" | ssh riva wl-copy &
+wait
