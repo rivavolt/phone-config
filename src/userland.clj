@@ -1,15 +1,16 @@
-(ns termux
-  "Termux-plane desired state, applied over ssh: packages, login shell, sshd,
-  payload files, supervised services, uv tools, and the binary-fetched tools
-  no Termux repo serves."
+(ns userland
+  "The dev environment expected in Termux: packages, zsh as login shell, the
+  outbound ssh client config, uv tools, and the binary-fetched tools no
+  Termux repo serves."
   (:require [engine :refer [defstep log]]
-            [transport :refer [repo ssh ssh-ok? file-current? push-file]]
+            [transport :refer [repo ssh ssh-ok? files-current? sync-files]]
+            [nixos-config]
             [babashka.fs :as fs]
             [babashka.http-client :as http]
             [cheshire.core :as json]
             [clojure.string :as str]))
 
-(defn- wanted-packages []
+(defn wanted-packages []
   (->> (fs/read-all-lines (str repo "/packages.txt"))
        (remove #(or (str/blank? %) (str/starts-with? % "#")))
        set))
@@ -41,40 +42,9 @@
   :check (= "zsh" (:out (ssh "basename $(readlink ~/.termux/shell 2>/dev/null) 2>/dev/null")))
   :apply! (ssh "chsh -s zsh"))
 
-(defstep :ssh-host-keys "sshd host keys present"
-  :check (ssh-ok? "ls $PREFIX/etc/ssh/ssh_host_*_key >/dev/null 2>&1")
-  :apply! (ssh "ssh-keygen -A"))
-
-(def payload
-  [["authorized_keys"           "~/.ssh/authorized_keys"                    "600"]
-   ["ssh_config"                "~/.ssh/config"                             "600"]
-   ["sshd_config.d/listen.conf" "$PREFIX/etc/ssh/sshd_config.d/listen.conf" "644"]
-   ["termux-adb-bootstrap"      "$PREFIX/bin/termux-adb-bootstrap"          "755"]
-   [".termux/boot/start-sshd"   "~/.termux/boot/start-sshd"                 "755"]])
-
-(defstep :files "payload files current"
-  :check (do (ssh "mkdir -p ~/.ssh ~/.termux/boot $PREFIX/etc/ssh/sshd_config.d")
-             (every? (fn [[src dest _]] (file-current? src dest)) payload))
-  :apply! (doseq [[src dest mode] payload
-                  :when (not (file-current? src dest))]
-            (log :push :files (str src " -> " dest))
-            (push-file src dest mode)))
-
-(defstep :adb-boot-hook "adbd-on-5555 re-established at boot"
-  ;; only meaningful once the fleet adb client key is on the device (onboard
-  ;; seeds it); wireless-debug authenticates with that key, so no pairing
-  :check (or (not (ssh-ok? "test -f ~/.android/adbkey"))
-             (ssh-ok? "test -x ~/.termux/boot/10-adb-bootstrap"))
-  :apply! (ssh (str "printf '%s\\n' '#!/data/data/com.termux/files/usr/bin/sh' "
-                    "'termux-wake-lock 2>/dev/null || true' 'termux-adb-bootstrap' "
-                    "'termux-wake-unlock 2>/dev/null || true' > ~/.termux/boot/10-adb-bootstrap; "
-                    "chmod 755 ~/.termux/boot/10-adb-bootstrap")))
-
-(defstep :services "sshd supervised by termux-services"
-  :check (ssh-ok? "SVDIR=$PREFIX/var/service sv status sshd 2>/dev/null | grep -q '^run:'")
-  :apply! (ssh (str "rm -f $PREFIX/var/service/sshd/down; "
-                    "pgrep -x runsvdir >/dev/null || setsid sh -c 'SVDIR=$PREFIX/var/service exec runsvdir $PREFIX/var/service' >/dev/null 2>&1 & "
-                    "sleep 2; SVDIR=$PREFIX/var/service sv up sshd")))
+(defstep :ssh-client-config "outbound ssh config current"
+  :check (files-current? [[@nixos-config/ssh-config-file "~/.ssh/config" "600"]])
+  :apply! (sync-files [[@nixos-config/ssh-config-file "~/.ssh/config" "600"]]))
 
 (defstep :uv-tools "uv tools from ~/.config/uv-tools.txt"
   :check (or (not (ssh-ok? "test -f ~/.config/uv-tools.txt"))
@@ -105,6 +75,15 @@
   :check (ssh-ok? "command -v pnpm >/dev/null")
   :apply! (ssh "npm install -g pnpm"))
 
-(defstep :boot-apk "Termux:Boot APK installed (hooks never fire without it)"
-  :check (ssh-ok? "pm path com.termux.boot >/dev/null 2>&1")
-  :apply! (throw (ex-info "install over adb: phone onboard <serial>" {})))
+(defn adopt
+  "Add packages manually installed on the device (non-automatic) to
+  packages.txt. Stateless: apply never uninstalls, so this is the only
+  adoptable drift direction; removals are an edit to packages.txt."
+  []
+  (let [manual (set (str/split-lines (:out (ssh "apt-mark showmanual 2>/dev/null"))))
+        new (sort (remove (wanted-packages) manual))]
+    (if (empty? new)
+      (println "packages.txt already covers everything manually installed")
+      (do (spit (str repo "/packages.txt")
+                (str (str/join "\n" (sort (into (wanted-packages) new))) "\n"))
+          (println "adopted:" (str/join " " new))))))

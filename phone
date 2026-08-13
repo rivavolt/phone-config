@@ -1,12 +1,13 @@
 #!/usr/bin/env bb
 ;; Host-side reconciler for the fleet's Android phones. The phone is a target,
-;; not a runtime: steps run from a workstation over ssh (Termux plane) and adb
-;; (Android plane), check state before mutating, and re-running is always safe.
-;; The only things living on-device are the pushed payload files — notably the
+;; not a runtime: steps run from a workstation over ssh (Termux) and adb
+;; (Android), check state before mutating, and re-running is always safe. The
+;; only things living on-device are the pushed payload files — notably the
 ;; Termux:Boot hooks, which must work at boot with no host around.
 ;;
 ;;   phone apply  [device]   converge (default: pixel8)
 ;;   phone verify [device]   check only, exit non-zero on drift
+;;   phone adopt  [device]   fold the device's manual pkg installs into packages.txt
 ;;   phone onboard <serial>  first contact over USB adb, then: phone apply
 (require '[engine] '[transport])
 
@@ -16,8 +17,16 @@
    "nothing1" {:ssh "u0_a779@nothing1.tail.avolt.net"
                :adb "nothing1.tail.avolt.net:5555"}})
 
-;; step files register in execution order
-(require '[android16-exec] '[android] '[termux])
+;; policy files; registration order is execution order
+(require '[android16-exec] '[always-on-vpn] '[wireless-adb] '[termux-boot] '[sshd] '[userland])
+
+(defn- with-device [name f]
+  (let [dev (or (devices (or name "pixel8"))
+                (do (println "unknown device:" name) (System/exit 1)))]
+    (binding [transport/*dev* dev]
+      (when-not (transport/ssh-ok? "true")
+        (println "unreachable over ssh:" (:ssh dev)) (System/exit 1))
+      (f dev))))
 
 (let [[cmd arg] *command-line-args*]
   (case cmd
@@ -26,17 +35,17 @@
         ((resolve 'onboard/run)
          (or arg (do (println "usage: phone onboard <adb-serial>") (System/exit 1)))))
 
+    "adopt"
+    (with-device arg (fn [_] (userland/adopt)))
+
     ("apply" "verify")
-    (let [name (or arg "pixel8")
-          dev (or (devices name) (do (println "unknown device:" name) (System/exit 1)))]
-      (binding [transport/*dev* dev]
-        (println (format "== %s %s (%s)" cmd name (:ssh dev)))
-        (when-not (transport/ssh-ok? "true")
-          (println "unreachable over ssh:" (:ssh dev)) (System/exit 1))
+    (with-device arg
+      (fn [dev]
+        (println (format "== %s %s (%s)" cmd (or arg "pixel8") (:ssh dev)))
         (engine/converge {:check-only (= cmd "verify")})
         (when (pos? @engine/failures)
           (println @engine/failures "step(s) failed/drifted") (System/exit 1))
         (println "converged")))
 
-    (do (println "usage: phone {apply|verify} [device] | phone onboard <serial>")
+    (do (println "usage: phone {apply|verify|adopt} [device] | phone onboard <serial>")
         (System/exit 1))))

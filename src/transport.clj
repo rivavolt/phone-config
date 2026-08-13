@@ -24,21 +24,38 @@
 (defn ssh-ok? [cmd] (zero? (:exit (ssh cmd))))
 
 (defn adb
-  "Run adb against the device's tailnet adbd; nil when unreachable."
+  "Run adb against the device's tailnet adbd; nil when unreachable. Bounded by
+  `timeout` — a dozing phone lets the TCP connect hang for minutes otherwise."
   [& args]
   (let [t (:adb *dev*)]
-    (sh-out "adb" "connect" t)
-    (let [r (apply sh-out "adb" "-s" t args)]
+    (sh-out "timeout" "12" "adb" "connect" t)
+    (let [r (apply sh-out "timeout" "20" "adb" "-s" t args)]
       (when (zero? (:exit r)) r))))
 
+(defn- local-path [src]
+  (if (str/starts-with? src "/") src (str repo "/" src)))
+
 (defn file-current?
-  "Does dest on the device have the same content as repo-relative src?"
+  "Does dest on the device have the same content as src (repo-relative, or an
+  absolute path for rendered files)?"
   [src dest]
-  (let [local (first (str/split (:out (sh-out "md5sum" (str repo "/" src))) #" "))
+  (let [local (first (str/split (:out (sh-out "md5sum" (local-path src))) #" "))
         remote (:out (ssh (str "md5sum " dest " 2>/dev/null | cut -d' ' -f1")))]
     (= local remote)))
 
 (defn push-file [src dest mode]
   (p/shell "scp" "-P" "8022" "-q" "-o" "StrictHostKeyChecking=accept-new"
-           (str repo "/" src) (str (:ssh *dev*) ":" dest))
+           (local-path src) (str (:ssh *dev*) ":" dest))
   (ssh (str "chmod " mode " " dest)))
+
+(defn files-current?
+  "Are all [src dest mode] rows current on the device?"
+  [rows]
+  (every? (fn [[src dest _]] (file-current? src dest)) rows))
+
+(defn sync-files
+  "Push every stale [src dest mode] row."
+  [rows]
+  (doseq [[src dest mode] rows
+          :when (not (file-current? src dest))]
+    (push-file src dest mode)))

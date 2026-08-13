@@ -12,6 +12,7 @@ which must work at boot with no host around.
 ```
 ./phone apply  [device]    converge (default: pixel8)
 ./phone verify [device]    check only, exit non-zero on drift
+./phone adopt  [device]    fold the device's manual pkg installs into packages.txt
 ./phone onboard <serial>   first contact over USB adb, then: phone apply
 ```
 
@@ -22,24 +23,28 @@ phone                       entry: device table + CLI dispatch
 src/engine.clj              step registry + converge loop (check → apply → re-check)
 src/transport.clj           ssh / adb / content-addressed file push
 src/android16_exec.clj      workaround with a sunset — delete the file when upstream fixes it
-src/android.clj             Android-plane state: settings, doze whitelist (over adb)
-src/termux.clj              Termux-plane state: packages, shell, sshd, payload files,
-                            services, uv tools, binary-fetched tools (over ssh)
+src/always_on_vpn.clj       policy: the tailnet survives reboots (lockdown OFF, with why)
+src/wireless_adb.clj        policy: adb reachable across reboots (toggle + bootstrap + hook)
+src/termux_boot.clj         policy: boot hooks actually fire (Boot APK + doze exemptions)
+src/sshd.clj                policy: reachable over ssh (keys, config, supervision, hook)
+src/userland.clj            policy: the dev environment (packages, zsh, uv, doctl/gcloud/pnpm)
+src/nixos_config.clj        the nixos-config seam: authorized_keys + ssh_config rendered
+                            fresh at apply time — never vendored
 src/onboard.clj             USB first-contact flow (runs before ssh exists)
 packages.txt                pkg names, one per line (termux-main + tur-repo)
-authorized_keys             pubkeys for ~/.ssh/authorized_keys (generated — sync-keys)
-ssh_config                  the phone's ~/.ssh/config (generated — sync-config)
 sshd_config.d/listen.conf   drop-in for $PREFIX/etc/ssh/sshd_config.d/
 termux-adb-bootstrap        re-pins adbd to TCP 5555 (runs on-device at boot)
 .termux/boot/start-sshd     Termux:Boot hook: supervised sshd
-sync-keys / sync-config     regenerate the two generated files from nixos-config
-sync-packages               diff installed-on-phone vs packages.txt
 ```
 
-Steps live in per-concern files; registration order is execution order,
-declared once in `phone`. Workarounds get their own file named for the
-specific problem (`android16_exec.clj`), never a shared bucket — the filename
+Files group by the policy that carries a rationale, never by mechanism —
+`always_on_vpn.clj` answers "why is lockdown off" by existing. Registration
+order is execution order, declared once in `phone`. Workarounds get their own
+file named for the specific problem (`android16_exec.clj`); the filename
 carries the sunset, and deleting the file is the whole change when it arrives.
+Generated files are rendered from nixos-config at apply time rather than
+vendored: a committed render is a cache with no invalidation (the old
+sync-keys shipped a stale key set for months before this rewrite caught it).
 
 ## Onboarding a new phone
 
@@ -66,11 +71,9 @@ without a cable is a reboot (Termux:Boot re-runs the bootstrap) or
 
 ## Adding a device pubkey
 
-1. Add it to `~/dev/nixos-config/modules/shared/ssh-keys.nix` under `userKeys`.
-2. `./sync-keys`, commit, `./phone apply <device>` per phone.
-
-`sync-config` regenerates `ssh_config` the same way (it shells out to nix;
-`sync-keys` is plain awk).
+Add a `userKey` to the machine's entry in nixos-config's `flake/machines.nix`,
+then `./phone apply <device>` per phone — the render picks it up directly.
+Phones' own keys are excluded via their `androidDevice` flag.
 
 ## Termux vs NixOS — what you give up
 
