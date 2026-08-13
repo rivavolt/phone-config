@@ -11,23 +11,23 @@
 ;;   phone onboard <serial>  first contact over USB adb, then: phone apply
 (require '[engine] '[transport] '[nixos-config] '[onboard])
 
-;; the Termux uid is the only per-device datum; everything else derives from
-;; the name (which must match the machine's entry in nixos-config's
-;; flake/machines.nix, androidDevice = true)
-(def devices {"pixel8" "u0_a366", "nothing1" "u0_a779"})
+;; ssh user/FQDN/port for a device come from the workstation's rendered
+;; ~/.ssh/config (nixos-config's android-devices module) — the name IS the ssh
+;; alias, so nothing device-specific lives here beyond the roster itself
+(def devices #{"pixel8" "nothing1"})
 
 ;; policy files; registration order is execution order
-(require '[android16-exec] '[always-on-vpn] '[airplane-radios] '[fast-animations] '[wifi-scan-throttle] '[wireless-adb] '[termux-boot] '[sshd] '[userland])
+(require '[android16-exec] '[always-on-vpn] '[airplane-radios] '[fast-animations]
+         '[wifi-scan-throttle] '[wireless-adb] '[termux-boot] '[storage] '[sshd] '[userland])
 
 (defn- with-device [name f]
-  (let [name (or name "pixel8")
-        uid (or (devices name) (do (println "unknown device:" name) (System/exit 1)))
-        dev {:ssh (str uid "@" name ".tail.avolt.net")
-             :adb (str name ".tail.avolt.net:5555")}]
-    (binding [transport/*dev* dev]
+  (let [name (or name "pixel8")]
+    (when-not (devices name)
+      (println "unknown device:" name) (System/exit 1))
+    (binding [transport/*dev* {:ssh name :adb (str name ".tail.avolt.net:5555")}]
       (when-not (transport/ssh-ok? "true")
-        (println "unreachable over ssh:" (:ssh dev)) (System/exit 1))
-      (f name dev))))
+        (println "unreachable over ssh:" name) (System/exit 1))
+      (f name))))
 
 (let [[cmd arg] *command-line-args*]
   (case cmd
@@ -35,12 +35,12 @@
     (onboard/run (or arg (do (println "usage: phone onboard <adb-serial>") (System/exit 1))))
 
     "adopt"
-    (with-device arg (fn [_ _] (userland/adopt)))
+    (with-device arg (fn [_] (userland/adopt)))
 
     ("apply" "verify")
     (with-device arg
-      (fn [name dev]
-        (println (format "== %s %s (%s)" cmd name (:ssh dev)))
+      (fn [name]
+        (println (format "== %s %s" cmd name))
         ;; renders take seconds of nix; overlap them with the early steps
         (future (try @nixos-config/authorized-keys-file @nixos-config/ssh-config-file
                      (catch Exception _)))

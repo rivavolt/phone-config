@@ -3,22 +3,16 @@
 # reachable on the phone's tailnet IP, with NO USB involved. Runs at boot via
 # Termux:Boot (~/.termux/boot/) and on demand via `ssh phone termux-adb-bootstrap`.
 #
-# The phone has dead USB ports, so the classic `adb tcpip 5555` USB bootstrap is
-# impossible. This script reaches adbd over the *network* instead:
+# It reaches adbd over the network (no USB involved):
 #
-#   ROOTED phone (su works): just set the persistent property and (re)start adbd.
-#     `service.adb.tcp.port=5555` survives reboots, so adbd always comes up on
-#     5555 on its own — this script's per-boot work is then a no-op, but we still
-#     reassert it for robustness.
-#
-#   NON-ROOTED Android 11+ : use Wireless Debugging. Pairing is done ONCE (by
-#     phone-adb-setup, persists across reboots). But the wireless-debug *connect*
-#     port randomizes every boot and is only mDNS-advertised (mDNS doesn't cross
-#     the tailnet). So each boot we: discover the current connect port locally on
-#     the phone (a loopback TCP port scan — see below), `adb connect
-#     127.0.0.1:<port>` over loopback, then `adb tcpip 5555` so adbd ALSO binds
-#     the fixed 5555 — now reachable on the tailnet IP. That fixed 5555 resets on
-#     reboot, which is exactly why this runs at every boot.
+#   The wireless-debug *connect* port randomizes every boot and is only
+#   mDNS-advertised (mDNS doesn't cross the tailnet). So each boot we: discover
+#   the current connect port locally (a loopback TCP port scan — see below),
+#   `adb connect 127.0.0.1:<port>` over loopback — authenticated by the fleet
+#   adb client key the phone authorized over USB, so no pairing is involved —
+#   then `adb tcpip 5555` so adbd ALSO binds the fixed 5555, reachable on the
+#   tailnet IP. That fixed 5555 resets on reboot (and on some devices on USB
+#   unplug), which is exactly why this runs at every boot.
 #
 # DEFERRED: adbd stays listening on 5555 for the whole uptime, not just while a
 # host is actively using it. Shrinking that exposure — an on-demand teardown that
@@ -52,19 +46,6 @@ if already_on_5555; then
   exit 0
 fi
 
-# --- Path A: rooted -------------------------------------------------------------
-if command -v su >/dev/null 2>&1 && echo id | su 2>/dev/null | grep -q "uid=0"; then
-  log "root available — setting persistent service.adb.tcp.port=$PORT and restarting adbd"
-  su -c "setprop service.adb.tcp.port $PORT; setprop ctl.restart adbd" 2>>"$LOG"
-  sleep 2
-  if already_on_5555; then
-    log "adbd on $PORT via root — ok (persistent across reboots)"
-    exit 0
-  fi
-  log "root path didn't bring adbd up on $PORT, falling through to wireless-debug"
-fi
-
-# --- Path B: non-rooted Android 11+ Wireless Debugging --------------------------
 # Find the current wireless-debug CONNECT port (randomized each boot). Several
 # discovery methods, best-first; the user must have toggled Wireless Debugging on
 # once (it stays on across reboots once enabled).
@@ -119,8 +100,8 @@ connect_wd() {
 WD_PORT=$(connect_wd || true)
 if [ -z "${WD_PORT:-}" ]; then
   log "ERROR: no wireless-debug connect port found / authenticated."
-  log "  Ensure Settings > Developer options > Wireless debugging is ON (persists across reboots),"
-  log "  and that this host is paired (run phone-adb-setup once with the 6-digit code)."
+  log "  Ensure wireless debugging is ON and the fleet adb key is seeded"
+  log "  (both converged by: phone apply, in ~/dev/termux-setup)."
   exit 2
 fi
 

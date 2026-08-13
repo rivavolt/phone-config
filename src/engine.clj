@@ -9,6 +9,11 @@
 
 (def steps (atom []))
 
+(defn step
+  "The one home of the step shape. apply may be nil (manual-only step)."
+  [id doc plane check apply]
+  {:id id :doc doc :plane plane :check check :apply apply})
+
 (defn step! [m] (swap! steps conj m))
 
 (defmacro defstep
@@ -16,9 +21,9 @@
   mutates (omit it for manual-only steps). Registration order is execution
   order."
   [id doc & {:keys [plane check apply!]}]
-  `(step! {:id ~id :doc ~doc :plane ~(or plane :ssh)
-           :check (fn [] ~check)
-           :apply ~(when apply! `(fn [] ~apply!))}))
+  `(step! (step ~id ~doc ~(or plane :ssh)
+                (fn [] ~check)
+                ~(when apply! `(fn [] ~apply!)))))
 
 (defn log [tag id msg]
   (println (format "  %-6s %-18s %s" (name tag) (name id) msg)))

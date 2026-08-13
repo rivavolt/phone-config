@@ -1,12 +1,13 @@
 (ns transport
-  "All I/O to a device: ssh into Termux (port 8022, connection-multiplexed),
-  adb against the tailnet adbd (connected once per run), and content-addressed
-  file sync. The target device is bound once per run via *dev*
-  {:ssh user@host :adb host:port}. File sources are absolute paths — use
-  repo-file for files vendored in this repo; rendered files are already
-  absolute."
-  (:require [babashka.process :as p]
+  "All I/O to a device, plus the step builders whose value is transport
+  batching (one adb round-trip for every settings row, one ssh for every file
+  digest). The target is bound once per run via *dev* {:ssh alias-or-target
+  :adb host:port}; the ssh side rides the workstation's rendered ~/.ssh/config
+  matchBlocks (user, FQDN, port). File sources are absolute paths or delays
+  thereof — use repo-file for files vendored in this repo."
+  (:require [engine]
             [babashka.fs :as fs]
+            [babashka.process :as p]
             [clojure.string :as str]))
 
 (def ^:dynamic *dev* nil)
@@ -39,18 +40,15 @@
 
 (defn ssh-ok? [cmd] (zero? (:exit (ssh cmd))))
 
-;; adb: connect once per run and remember the outcome — a dozing phone would
-;; otherwise re-eat the connect timeout in every step
-(def ^:private adb-up (atom {}))
+;; adb: connect once per target and remember the outcome — a dozing phone
+;; would otherwise re-eat the connect timeout in every step
+(def ^:private target-up?
+  (memoize
+   (fn [t]
+     (and (zero? (:exit (sh-out "timeout" "12" "adb" "connect" t)))
+          (zero? (:exit (sh-out "timeout" "10" "adb" "-s" t "shell" "true")))))))
 
-(defn adb-plane-up? []
-  (let [t (:adb *dev*)]
-    (if (contains? @adb-up t)
-      (get @adb-up t)
-      (let [up (and (zero? (:exit (sh-out "timeout" "12" "adb" "connect" t)))
-                    (zero? (:exit (sh-out "timeout" "10" "adb" "-s" t "shell" "true"))))]
-        (swap! adb-up assoc t up)
-        up))))
+(defn adb-plane-up? [] (target-up? (:adb *dev*)))
 
 (defn adb
   "Run adb against the device's tailnet adbd; nil when unreachable or failed."
@@ -59,10 +57,48 @@
     (let [r (apply sh-out "timeout" "20" "adb" "-s" (:adb *dev*) args)]
       (when (zero? (:exit r)) r))))
 
+;; ------------------------------------------------------------ settings sync
+
+;; every settings-step registers its rows here at load time, so the first
+;; check fetches ALL of them in one adb call; apply chains its puts with a
+;; full re-get, so the engine's re-check reads genuine read-back values from
+;; the cache without another round-trip
+(def ^:private settings-rows (atom []))
+(def ^:private settings-cache (atom nil))
+
+(defn- get-cmds [rows] (map (fn [[ns k _]] (str "settings get " ns " " k)) rows))
+
+(defn- cache-settings! [out]
+  (reset! settings-cache
+          (when out (zipmap (map (fn [[ns k _]] [ns k]) @settings-rows)
+                            (str/split-lines out)))))
+
+(defn- settings-current? [rows]
+  (when (nil? @settings-cache)
+    (cache-settings! (:out (adb "shell" (str/join "; " (get-cmds @settings-rows))))))
+  (when-let [c @settings-cache]
+    (every? (fn [[ns k v]] (= v (get c [ns k]))) rows)))
+
+(defn- put-settings! [rows]
+  (let [cmd (str/join "; " (concat (map (fn [[ns k v]] (str "settings put " ns " " k " " v)) rows)
+                                   (get-cmds @settings-rows)))]
+    (cache-settings! (:out (adb "shell" cmd)))))
+
+(defn settings-step
+  "Register a step converging Android `settings` rows [namespace key value]."
+  [id doc rows]
+  (swap! settings-rows into rows)
+  (engine/step! (engine/step id doc :adb
+                             #(settings-current? rows)
+                             #(put-settings! rows))))
+
 ;; ---------------------------------------------------------------- file sync
 
+(defn- src-path [src] (str (force src)))
+
 (defn- local-md5 [path]
-  (first (str/split (:out (sh-out "md5sum" path)) #"\s+")))
+  (format "%032x" (BigInteger. 1 (.digest (java.security.MessageDigest/getInstance "MD5")
+                                          (fs/read-all-bytes path)))))
 
 (defn- stale-rows
   "Rows whose device content differs from the source. One ssh for all rows,
@@ -71,37 +107,31 @@
   (let [cmd (str/join "; " (map (fn [[_ dest _]] (str "md5sum " dest " 2>/dev/null || echo missing"))
                                 rows))
         lines (str/split-lines (:out (ssh cmd)))]
-    (doall (keep (fn [[row line]]
-                   (when (not= (local-md5 (first row))
-                               (first (str/split (or line "") #"\s+")))
-                     row))
-                 (map vector rows (concat lines (repeat nil)))))))
+    (doall (filter some?
+                   (map (fn [row line]
+                          (when (not= (local-md5 (src-path (first row)))
+                                      (first (str/split line #"\s+")))
+                            row))
+                        rows (concat lines (repeat "")))))))
 
 (defn- push-files
   "Push every row: parent dirs in one ssh, scp per file, modes in one ssh."
   [rows]
   (ssh (str "mkdir -p " (str/join " " (distinct (map (fn [[_ dest _]] (str (fs/parent dest))) rows)))))
   (doseq [[src dest _] rows]
-    (apply p/shell (concat ["scp" "-q" "-P" "8022"] ssh-opts [src (str (:ssh *dev*) ":" dest)])))
+    (apply p/shell (concat ["scp" "-q" "-P" "8022"] ssh-opts
+                           [(src-path src) (str (:ssh *dev*) ":" dest)])))
   (ssh (str/join "; " (map (fn [[_ dest mode]] (str "chmod " mode " " dest)) rows))))
 
-(defn settings-step
-  "Step map converging Android `settings` rows [namespace key value], batched
-  into one adb call each way."
-  [id doc rows]
-  {:id id :doc doc :plane :adb
-   :check (fn [] (= (map peek rows)
-                    (some-> (adb "shell" (clojure.string/join "; " (map (fn [[ns k _]] (str "settings get " ns " " k)) rows)))
-                            :out clojure.string/split-lines)))
-   :apply (fn [] (adb "shell" (clojure.string/join "; " (map (fn [[ns k v]] (str "settings put " ns " " k " " v)) rows))))})
-
 (defn files-step
-  "Step map converging [src dest mode] payload rows (src absolute; rows-fn so
-  renders are only forced when the step runs). Optional :after shell command
-  runs once following a push (e.g. a reload)."
-  [id doc rows-fn & {:keys [after]}]
-  {:id id :doc doc :plane :ssh
-   :check (fn [] (empty? (stale-rows (rows-fn))))
-   :apply (fn []
-            (push-files (stale-rows (rows-fn)))
-            (when after (ssh after)))})
+  "Register a step converging [src dest mode] payload rows; src may be a delay
+  (renders stay unforced until the step runs). The check's stale set is handed
+  to apply, so a drifted step costs one digest batch, not two. Optional :after
+  shell command runs once following a push (e.g. a reload)."
+  [id doc rows & {:keys [after]}]
+  (let [stale (atom nil)]
+    (engine/step! (engine/step id doc :ssh
+                               (fn [] (empty? (reset! stale (stale-rows rows))))
+                               (fn []
+                                 (push-files @stale)
+                                 (when after (ssh after)))))))

@@ -3,7 +3,8 @@
   outbound ssh client config, Termux UI config (font, properties, the
   clipboard-broadcast shortcuts), and the binary-fetched tools no Termux repo
   serves."
-  (:require [engine :refer [defstep step! log]]
+  (:require [engine :refer [defstep log]]
+            [engine]
             [transport :refer [repo-file ssh ssh-ok? files-step]]
             [nixos-config]
             [babashka.fs :as fs]
@@ -46,15 +47,15 @@
   :check (= "zsh" (:out (ssh "basename $(readlink ~/.termux/shell 2>/dev/null) 2>/dev/null")))
   :apply! (ssh "chsh -s zsh"))
 
-(step! (files-step :ssh-client-config "outbound ssh config current"
-                   #(vector [@nixos-config/ssh-config-file "~/.ssh/config" "600"])))
+(files-step :ssh-client-config "outbound ssh config current"
+            [[nixos-config/ssh-config-file "~/.ssh/config" "600"]])
 
-(step! (files-step :termux-ui "font, properties, clipboard shortcuts current"
-                   #(vector [(repo-file ".termux/font.ttf")          "~/.termux/font.ttf"          "644"]
-                            [(repo-file ".termux/termux.properties") "~/.termux/termux.properties" "644"]
-                            [(repo-file ".shortcuts/copy")           "~/.shortcuts/copy"           "755"]
-                            [(repo-file ".shortcuts/paste")          "~/.shortcuts/paste"          "755"])
-                   :after "termux-reload-settings 2>/dev/null || true"))
+(files-step :termux-ui "font, properties, clipboard shortcuts current"
+            [[(repo-file ".termux/font.ttf")          "~/.termux/font.ttf"          "644"]
+             [(repo-file ".termux/termux.properties") "~/.termux/termux.properties" "644"]
+             [(repo-file ".shortcuts/copy")           "~/.shortcuts/copy"           "755"]
+             [(repo-file ".shortcuts/paste")          "~/.shortcuts/paste"          "755"]]
+            :after "termux-reload-settings 2>/dev/null || true")
 
 ;; Binary-fetched tools missing from every Termux repo — one pattern: fetch a
 ;; tarball, run its install command. GitHub's API is read with a real JSON
@@ -74,10 +75,10 @@
     :install "tar -xzf t.tgz -C ~ && for b in gcloud gsutil bq; do ln -sf ~/google-cloud-sdk/bin/$b $PREFIX/bin/$b; done"}])
 
 (doseq [{:keys [id doc check url install]} fetched-tools]
-  (step! {:id id :doc doc :plane :ssh
-          :check #(ssh-ok? check)
-          :apply #(ssh (format "cd $TMPDIR && curl -fsSL '%s' -o t.tgz && %s && rm -f t.tgz"
-                               (url) install))}))
+  (engine/step! (engine/step id doc :ssh
+                             #(ssh-ok? check)
+                             #(ssh (format "cd $TMPDIR && curl -fsSL '%s' -o t.tgz && %s && rm -f t.tgz"
+                                           (url) install)))))
 
 (defstep :pnpm "pnpm via npm"
   :check (ssh-ok? "command -v pnpm >/dev/null")

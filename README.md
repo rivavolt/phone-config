@@ -19,12 +19,16 @@ which must work at boot with no host around.
 ## Layout
 
 ```
-phone                       entry: device table + CLI dispatch
+phone                       entry: device roster + CLI dispatch (ssh details come from
+                            the workstation's rendered ~/.ssh/config, not from here)
 src/engine.clj              step registry + converge loop (check → apply → re-check)
 src/transport.clj           ssh / adb / content-addressed file push
 src/android16_exec.clj      workaround with a sunset — delete the file when upstream fixes it
 src/always_on_vpn.clj       policy: the tailnet survives reboots (lockdown OFF, with why)
 src/airplane_radios.clj     policy: airplane mode spares wifi + bluetooth
+src/fast_animations.clj     policy: animation scales at half duration
+src/wifi_scan_throttle.clj  policy: wi-fi scan throttling off
+src/storage.clj             policy: Termux reads shared storage (appop + ~/storage farm)
 src/wireless_adb.clj        policy: adb reachable across reboots (toggle + bootstrap + hook)
 src/termux_boot.clj         policy: boot hooks actually fire (Boot APK + doze exemptions)
 src/sshd.clj                policy: reachable over ssh (keys, config, supervision, hook)
