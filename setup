@@ -25,6 +25,23 @@ source "$ROOT/lib/services.sh"
 
 [ -n "${PREFIX:-}" ] || die "PREFIX unset — run inside Termux"
 
+log "0. exec mode (Android 16 Go-binary fix)"
+# On Android 16 (SDK 36) termux-exec's hook rewrites every exec through
+# /system/bin/linker64. C binaries get their argv fixed up by the preload
+# constructor, but Go reads argv off the raw stack first, so every Go binary
+# (gojq, doctl, gh, …) sees its own path as argv[1] and breaks. The app targets
+# SDK 28, whose SELinux domain still permits direct exec of app-data binaries,
+# so forcing linker-exec off is safe — and a no-op on older Android where
+# direct exec is the default anyway.
+export TERMUX_EXEC__SYSTEM_LINKER_EXEC__MODE=disable
+mode_line='export TERMUX_EXEC__SYSTEM_LINKER_EXEC__MODE=disable'
+mkdir -p "$PREFIX/etc/profile.d"
+printf '%s\n' "$mode_line" > "$PREFIX/etc/profile.d/termux-exec-mode.sh"
+if ! grep -qF "$mode_line" "$PREFIX/etc/zshenv" 2>/dev/null; then
+  printf '%s\n' "$mode_line" >> "$PREFIX/etc/zshenv"
+fi
+ok "system-linker-exec disabled (profile.d + zshenv)"
+
 log "1. packages (apt)"
 packages_apply "$ROOT/packages.txt"
 
