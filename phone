@@ -17,7 +17,7 @@
 (def devices {"pixel8" "u0_a366", "nothing1" "u0_a779"})
 
 ;; policy files; registration order is execution order
-(require '[android16-exec] '[always-on-vpn] '[airplane-radios] '[wireless-adb] '[termux-boot] '[sshd] '[userland])
+(require '[android16-exec] '[always-on-vpn] '[airplane-radios] '[fast-animations] '[wifi-scan-throttle] '[wireless-adb] '[termux-boot] '[sshd] '[userland])
 
 (defn- with-device [name f]
   (let [name (or name "pixel8")
