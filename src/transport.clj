@@ -114,13 +114,17 @@
                             row))
                         rows (concat lines (repeat "")))))))
 
+(def ^:private termux-prefix "/data/data/com.termux/files/usr")
+
 (defn- push-files
-  "Push every row: parent dirs in one ssh, scp per file, modes in one ssh."
+  "Push every row: parent dirs in one ssh, scp per file, modes in one ssh.
+  scp's sftp mode expands no remote variables, so $PREFIX dests are translated
+  to the literal path for the copy (the ssh-side md5/chmod expand them fine)."
   [rows]
   (ssh (str "mkdir -p " (str/join " " (distinct (map (fn [[_ dest _]] (str (fs/parent dest))) rows)))))
   (doseq [[src dest _] rows]
     (apply p/shell (concat ["scp" "-q" "-P" "8022"] ssh-opts
-                           [(src-path src) (str (:ssh *dev*) ":" dest)])))
+                           [(src-path src) (str (:ssh *dev*) ":" (str/replace dest "$PREFIX" termux-prefix))])))
   (ssh (str/join "; " (map (fn [[_ dest mode]] (str "chmod " mode " " dest)) rows))))
 
 (defn files-step
