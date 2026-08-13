@@ -1,0 +1,111 @@
+#!/usr/bin/env bash
+# Host-side zero-UI onboarding of a NEW Android phone into the fleet, over USB
+# adb from a workstation. Codifies the Pixel 8 flow (2026-08): everything except
+# headscale registration and the physical USB plug happens without touching the
+# phone's screen, because Termux debug builds allow `run-as com.termux`.
+#
+# Prereqs: phone on USB with adb authorized; ~/.android/adbkey is the fleet key
+# (seeded from secrets/adbkey.yaml via andrei.phoneAdbKey.enable); `gh` logged in.
+#
+# What this does, in order:
+#   1. Tailscale sign-in state check (the app + hs.avolt.net login are UI steps;
+#      registration is `ssh amp -- sudo headscale nodes register -u andrei -k <key>`,
+#      the key appears in `adb logcat | grep hs.avolt.net/register`).
+#   2. Always-on VPN pinned to Tailscale (lockdown deliberately OFF — with it on,
+#      an expired node key strands the phone with no network at all).
+#   3. Wireless debugging on + adbd pinned to TCP 5555.
+#   4. Termux + Termux:Boot APKs from GitHub releases. Termux:Boot fails Play
+#      Protect verification over adb, so the verifier is disabled for that one
+#      install and restored right after.
+#   5. Core packages + this repo + `setup` inside Termux, driven via run-as.
+#   6. The fleet adb client key into Termux's ~/.android — the phone authorized
+#      it over USB already, so termux-adb-bootstrap authenticates to the
+#      wireless-debug port with NO pairing dialog, ever.
+#   7. Doze exemptions + one Termux:Boot launch to arm its boot receiver.
+#
+# Known traps (all hit for real on the Pixel 8):
+#   - `adb tcpip 5555` restarts adbd, killing anything started via run-as over
+#     that same transport — including a just-started sshd. Order matters: sshd
+#     comes up LAST, or via the tailnet transport.
+#   - On the Pixel 8 the 5555 bind also dies on USB UNPLUG, not just reboot.
+#     Recovery without the cable: reboot (Termux:Boot), or
+#     `ssh -p 8022 <phone> termux-adb-bootstrap`.
+set -euo pipefail
+
+serial="${1:?usage: onboard <adb-serial> (adb devices -l)}"
+here="$(cd "$(dirname "$0")" && pwd)"
+adb() { command adb -s "$serial" "$@"; }
+runas() {
+  adb shell "run-as com.termux sh -c '
+    export PREFIX=/data/data/com.termux/files/usr
+    export HOME=/data/data/com.termux/files/home
+    export PATH=\$PREFIX/bin:\$PATH
+    export LD_LIBRARY_PATH=\$PREFIX/lib
+    export TMPDIR=\$PREFIX/tmp
+    mkdir -p \$TMPDIR
+    $*'"
+}
+
+echo "== device"
+adb shell getprop ro.product.model
+
+echo "== tailscale"
+if ! adb shell ip addr show 2>/dev/null | grep -q 'inet 100\.'; then
+  cat >&2 <<'EOF'
+Tailscale is not connected. On the phone: install Tailscale, log in against
+https://hs.avolt.net, then register the node (the key is in logcat):
+  adb logcat -d | grep -o 'hs.avolt.net/register/[A-Za-z0-9]*'
+  ssh amp -- sudo headscale nodes register -u andrei -k <key>
+  ssh amp -- sudo headscale nodes rename -i <id> <name>
+  ssh amp -- sudo headscale nodes tag -i <id> -t tag:personal
+Then re-run onboard.
+EOF
+  exit 1
+fi
+adb shell settings put secure always_on_vpn_app com.tailscale.ipn
+adb shell settings put secure always_on_vpn_lockdown 0
+
+echo "== termux apks"
+if ! adb shell pm path com.termux >/dev/null 2>&1; then
+  tmp=$(mktemp -d)
+  gh release download --repo termux/termux-app --pattern '*arm64-v8a.apk' -D "$tmp"
+  adb install -r "$tmp"/*.apk
+  rm -rf "$tmp"
+fi
+if ! adb shell pm path com.termux.boot >/dev/null 2>&1; then
+  tmp=$(mktemp -d)
+  gh release download --repo termux/termux-boot --pattern '*.apk' -D "$tmp"
+  adb shell settings put global verifier_verify_adb_installs 0
+  adb install -r "$tmp"/*.apk || true
+  adb shell settings delete global verifier_verify_adb_installs
+  rm -rf "$tmp"
+fi
+# First launch extracts the bootstrap $PREFIX; wait for usr/bin to populate.
+adb shell am start -n com.termux/.app.TermuxActivity >/dev/null
+until [ "$(runas 'ls $PREFIX/bin 2>/dev/null | wc -l' | tr -d '[:space:]\r')" -gt 100 ]; do
+  sleep 3
+done
+
+echo "== fleet adb key into termux"
+runas "mkdir -p \$HOME/.android
+  echo $(base64 -w0 ~/.android/adbkey) | base64 -d > \$HOME/.android/adbkey
+  echo $(base64 -w0 ~/.android/adbkey.pub) | base64 -d > \$HOME/.android/adbkey.pub
+  chmod 600 \$HOME/.android/adbkey"
+
+echo "== termux-setup"
+runas 'command -v git >/dev/null || pkg install -y git'
+runas 'test -d $HOME/termux-setup/.git || git clone https://github.com/andreivolt/termux-setup.git $HOME/termux-setup'
+runas 'cd $HOME/termux-setup && git pull --ff-only && bash setup' || true
+
+echo "== wireless debugging + fixed port"
+adb shell settings put global adb_wifi_enabled 1
+adb shell dumpsys deviceidle whitelist +com.termux >/dev/null
+adb shell dumpsys deviceidle whitelist +com.termux.boot >/dev/null
+adb shell am start -n com.termux.boot/.BootActivity >/dev/null 2>&1 || true
+adb tcpip 5555
+
+echo "== done"
+ip=$(adb shell ip -4 addr show 2>/dev/null | grep -o 'inet 100\.[0-9.]*' | cut -d' ' -f2 | head -1)
+echo "verify:  adb connect ${ip:-<tailnet-ip>}:5555"
+echo "         ssh -p 8022 <termux-user>@${ip:-<tailnet-ip>}"
+echo "reboot the phone once to prove Termux:Boot brings both back."

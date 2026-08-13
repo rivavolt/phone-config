@@ -59,6 +59,38 @@ if [ -f "$HOME/.termux/boot/start-sshd.sh" ]; then
   ok "stale boot script removed"
 fi
 
+log "9. adb bootstrap (fixed port 5555 across reboots)"
+# adbd's TCP 5555 dies on every reboot — and on some devices (Pixel 8) on USB
+# unplug too. The vendored bootstrap rediscovers the randomized wireless-debug
+# port over loopback, authenticates with ~/.android/adbkey (the fleet client
+# key the phone authorized over USB — no pairing dialog involved), and re-issues
+# `adb tcpip 5555`; the boot hook re-runs it at every boot via Termux:Boot.
+if [ -f "$HOME/.android/adbkey" ]; then
+  install -m 755 "$ROOT/termux-adb-bootstrap" "$PREFIX/bin/termux-adb-bootstrap"
+  printf '%s\n' '#!/data/data/com.termux/files/usr/bin/sh' \
+    'termux-wake-lock 2>/dev/null || true' \
+    'termux-adb-bootstrap' \
+    'termux-wake-unlock 2>/dev/null || true' > "$HOME/.termux/boot/10-adb-bootstrap"
+  chmod 755 "$HOME/.termux/boot/10-adb-bootstrap"
+  ok "termux-adb-bootstrap + boot hook installed"
+else
+  warn "no ~/.android/adbkey — skipping adb bootstrap (seed the fleet key first; onboard does this)"
+fi
+
+log "10. uv tools"
+# Venvs migrated from another device break (interpreter paths); reinstalling
+# natively from the declarative list is both the repair and the fresh path.
+if [ -f "$HOME/.config/uv-tools.txt" ] && command -v uv >/dev/null 2>&1; then
+  do_ "uv tool install from ~/.config/uv-tools.txt"
+  while read -r line; do
+    # shellcheck disable=SC2086
+    uv tool install $line >/dev/null 2>&1 || warn "uv tool failed: $line"
+  done < "$HOME/.config/uv-tools.txt"
+  ok "uv tools synced"
+else
+  skip "no ~/.config/uv-tools.txt or uv not installed"
+fi
+
 log "verify"
 errs=0
 
@@ -85,6 +117,12 @@ if compgen -G "$PREFIX/etc/ssh/ssh_host_*_key" >/dev/null; then
   ok "host keys present"
 else
   warn "host keys missing"; errs=$((errs+1))
+fi
+
+if pm path com.termux.boot >/dev/null 2>&1; then
+  ok "Termux:Boot APK installed"
+else
+  warn "Termux:Boot APK not installed — boot hooks will never fire (onboard installs it over adb)"
 fi
 
 if [ "$errs" -eq 0 ]; then

@@ -18,24 +18,48 @@ re-runnable any time.
 ├── lib/                        bash modules sourced by setup
 │   └── manual-install.sh       binary-fetched tools missing from any repo
 │                               (doctl, gcloud, pnpm)
+├── onboard                     host-side zero-UI onboarding of a NEW phone over USB adb
+├── termux-adb-bootstrap        re-pins adbd to TCP 5555 (vendored from nixos-config)
 └── .termux/boot/start-sshd     installed into ~/.termux/boot/ for Termux:Boot
 ```
 
 ## First-time install
 
-On the phone, in Termux:
+Preferred: from a workstation, phone on USB with adb authorized — no phone UI
+beyond the Tailscale sign-in:
+
+```
+./onboard <adb-serial>
+```
+
+`onboard` drives the whole thing over `run-as com.termux` (Termux debug builds
+are debuggable): installs the Termux + Termux:Boot APKs from GitHub releases
+(disabling the Play Protect adb-install verifier for just the Boot APK),
+pins always-on VPN to Tailscale (lockdown off), seeds the fleet adb client key
+into Termux's `~/.android` — the phone already authorized it over USB, so the
+wireless-debug connect needs NO pairing dialog, ever — clones this repo, runs
+`setup`, enables wireless debugging, and pins adbd to TCP 5555.
+
+Manual fallback, on the phone in Termux:
 
 ```
 pkg install -y git
-git clone https://github.com/avolt/termux-setup.git
+git clone https://github.com/andreivolt/termux-setup.git
 cd termux-setup
 bash setup
 ```
 
-That installs every package in `packages.txt`, switches the login shell to zsh,
-generates host keys, writes `~/.ssh/authorized_keys` from the vendored file,
-drops `listen.conf` into `sshd_config.d/`, enables + starts sshd via
-termux-services, and installs the boot script.
+`setup` installs every package in `packages.txt`, switches the login shell to
+zsh, generates host keys, writes `~/.ssh/authorized_keys` from the vendored
+file, drops `listen.conf` into `sshd_config.d/`, enables + starts sshd via
+termux-services, installs the boot scripts (sshd + the adb 5555 bootstrap),
+and reinstalls the uv tools from `~/.config/uv-tools.txt`.
+
+Ordering trap: `adb tcpip 5555` restarts adbd, which kills anything started
+via `run-as` over that same transport — a just-started sshd included. On some
+devices (Pixel 8) the 5555 bind also dies on USB unplug, not just reboot;
+recovery without a cable is a reboot (Termux:Boot) or
+`ssh -p 8022 <phone> termux-adb-bootstrap`.
 
 Re-open Termux for the zsh change to take effect.
 
