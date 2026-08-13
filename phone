@@ -16,9 +16,13 @@
 ;; alias, so nothing device-specific lives here beyond the roster itself
 (def devices #{"pixel8" "nothing1"})
 
-;; policy files; registration order is execution order
+;; policy files; registration order is execution order. Most steps are
+;; order-free (settings rows batch at load, the exec-mode prelude registers at
+;; load, planes probe once) — the one real dependency is userland's packages
+;; step before sshd's service step, which needs termux-services on a fresh
+;; device.
 (require '[android16-exec] '[always-on-vpn] '[airplane-radios] '[fast-animations]
-         '[wifi-scan-throttle] '[wireless-adb] '[termux-boot] '[storage] '[sshd] '[userland])
+         '[wifi-scan-throttle] '[wireless-adb] '[termux-boot] '[storage] '[userland] '[sshd])
 
 (defn- with-device [name f]
   (let [name (or name "pixel8")]
