@@ -14,7 +14,7 @@
 ;; ssh user/FQDN/port for a device come from the workstation's rendered
 ;; ~/.ssh/config (nixos-config's android-devices module) — the name IS the ssh
 ;; alias, so nothing device-specific lives here beyond the roster itself
-(def devices #{"pixel8" "nothing1"})
+(def devices #{"pixel8" "nothing1" "pixel3"})
 
 ;; policy files; registration order is execution order. Most steps are
 ;; order-free (settings rows batch at load, the exec-mode prelude registers at
