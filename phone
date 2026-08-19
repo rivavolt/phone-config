@@ -22,7 +22,7 @@
 ;; step before sshd's service step, which needs termux-services on a fresh
 ;; device.
 (require '[android16-exec] '[always-on-vpn] '[airplane-radios] '[fast-animations]
-         '[wifi-scan-throttle] '[wireless-adb] '[termux-boot] '[storage] '[userland] '[sshd]
+         '[wifi-scan-throttle] '[process-survival] '[wireless-adb] '[termux-boot] '[storage] '[userland] '[sshd]
          '[node-exporter] '[kdeconnect])
 
 (defn- with-device [name f]
