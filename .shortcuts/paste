@@ -1,4 +1,0 @@
-ssh mac pbpaste | termux-clipboard-set
-ssh mac pbpaste | ssh watts wl-copy &
-ssh mac pbpaste | ssh riva wl-copy &
-wait

@@ -23,7 +23,7 @@
 ;; device.
 (require '[android16-exec] '[always-on-vpn] '[airplane-radios] '[fast-animations]
          '[wifi-scan-throttle] '[wireless-adb] '[termux-boot] '[storage] '[userland] '[sshd]
-         '[node-exporter])
+         '[node-exporter] '[kdeconnect])
 
 (defn- with-device [name f]
   (let [name (or name "pixel8")]

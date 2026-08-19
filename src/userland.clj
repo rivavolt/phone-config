@@ -1,8 +1,7 @@
 (ns userland
   "The dev environment expected in Termux: packages, zsh as login shell, the
-  outbound ssh client config, Termux UI config (font, properties, the
-  clipboard-broadcast shortcuts), and the binary-fetched tools no Termux repo
-  serves."
+  outbound ssh client config, Termux UI config (font, properties), and the
+  binary-fetched tools no Termux repo serves."
   (:require [engine :refer [defstep log]]
             [engine]
             [transport :refer [repo-file ssh ssh-ok? files-step]]
@@ -50,11 +49,9 @@
 (files-step :ssh-client-config "outbound ssh config current"
             [[nixos-config/ssh-config-file "~/.ssh/config" "600"]])
 
-(files-step :termux-ui "font, properties, clipboard shortcuts current"
+(files-step :termux-ui "font, properties current"
             [[(repo-file ".termux/font.ttf")          "~/.termux/font.ttf"          "644"]
-             [(repo-file ".termux/termux.properties") "~/.termux/termux.properties" "644"]
-             [(repo-file ".shortcuts/copy")           "~/.shortcuts/copy"           "755"]
-             [(repo-file ".shortcuts/paste")          "~/.shortcuts/paste"          "755"]]
+             [(repo-file ".termux/termux.properties") "~/.termux/termux.properties" "644"]]
             :after "termux-reload-settings 2>/dev/null || true")
 
 ;; Binary-fetched tools missing from every Termux repo — one pattern: fetch a
