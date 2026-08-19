@@ -76,7 +76,9 @@
   can take over from here."
   [run-as]
   (println "== ssh + core packages")
-  (run-as "command -v sshd >/dev/null || pkg install -y openssh python")
+  ;; probe the Termux prefix specifically: LineageOS ships a vestigial
+  ;; /product/bin/sshd that `command -v` finds but that cannot even link
+  (run-as "[ -x $PREFIX/bin/sshd ] || pkg install -y openssh python")
   (run-as "mkdir -p $HOME/.ssh; chmod 700 $HOME/.ssh")
   (run-as (str "echo " (b64 @nixos-config/authorized-keys-file)
                " | base64 -d > $HOME/.ssh/authorized_keys; chmod 600 $HOME/.ssh/authorized_keys"))
