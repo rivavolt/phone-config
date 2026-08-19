@@ -1,0 +1,6 @@
+id=local-prop-fix
+name=Local Prop Fix
+version=v1
+versionCode=1
+author=andrei
+description=Scrub userdebug + LineageOS fingerprint props that local RASP checks probe
