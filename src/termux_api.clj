@@ -5,20 +5,27 @@
   of them hangs forever rather than failing. packages.txt installs the CLI half;
   this file owns the app half.
 
-  The APK cannot simply be downloaded from F-Droid: the Termux apps share a
-  sharedUserId, so Termux:API must carry the SAME signing key as the installed
-  Termux or the install dies with INSTALL_FAILED_SHARED_USER_INCOMPATIBLE. A
-  sideloaded Termux is the github.debug build, so its Termux:API is the
-  `termux-api-app_*+github.debug.apk` asset from termux/termux-api releases —
-  hence a manual step with the remediation in its doc rather than a guessed
-  auto-install.
+  Which APK to fetch is not a preference: the Termux apps share a sharedUserId,
+  so the plugin must carry the SAME signing key as the installed Termux or the
+  install dies with INSTALL_FAILED_SHARED_USER_INCOMPATIBLE. The source is
+  therefore read off the main app's installer — an F-Droid client means the
+  F-Droid build, anything else (sideloaded, or Obtainium tracking the releases)
+  means the `+github.debug` asset.
 
-  What does converge here: the runtime permissions the CLI depends on (a
-  freshly-installed app holds none of them, so termux-location returns an error
-  until granted) and the doze exemption that keeps the app answering when the
-  screen is off."
+  Keeping it current is deliberately NOT done here: a phone that installed
+  Termux through Droid-ify or Obtainium already has an updater watching that
+  source, and a second one racing it would just fight over versions. This step
+  owns presence; the on-device updater owns the version.
+
+  Also converged: the runtime permissions the CLI depends on (a freshly
+  installed app holds none, so termux-location errors until granted) and the
+  doze exemption that keeps the app answering with the screen off."
   (:require [engine :refer [defstep]]
-            [transport :refer [adb require-pkgs!]]
+            [transport :refer [adb sh-out require-pkgs!] :as transport]
+            [babashka.fs :as fs]
+            [babashka.http-client :as http]
+            [cheshire.core :as json]
+            [clojure.java.io :as io]
             [clojure.string :as str]))
 
 ;; the package this policy is built on
@@ -51,10 +58,40 @@
          (keep #(second (re-find #"(android\.permission\.\w+): granted=true" %)))
          set)))
 
-(defstep :termux-api-apk
-  "Termux:API APK installed — install the github.debug asset matching Termux's signature"
+(defn- termux-source
+  "Signing source of the MAIN Termux app, which the plugin has to match. An
+  F-Droid client as installer means the F-Droid build; a null installer
+  (sideloaded) or Obtainium means the github.debug asset."
+  []
+  (when-let [r (adb "shell" (str "pm list packages -i com.termux"))]
+    (if (re-find #"installer=(com\.looker\.droidify|org\.fdroid)" (:out r))
+      :fdroid
+      :github)))
+
+(defn- apk-url
+  "Download URL for the build matching `src`."
+  [src]
+  (case src
+    :fdroid (let [j (json/parse-string (:body (http/get "https://f-droid.org/api/v1/packages/com.termux.api")) true)]
+              (str "https://f-droid.org/repo/com.termux.api_" (:suggestedVersionCode j) ".apk"))
+    :github (let [j (json/parse-string (:body (http/get "https://api.github.com/repos/termux/termux-api/releases/latest")) true)]
+              (->> (:assets j)
+                   (filter #(str/ends-with? (:name %) "+github.debug.apk"))
+                   first
+                   :browser_download_url))))
+
+(defn- install-apk! []
+  (when-let [src (termux-source)]
+    (when-let [url (apk-url src)]
+      (let [tmp (str (fs/create-temp-file {:prefix "termux-api" :suffix ".apk"}))]
+        (io/copy (:body (http/get url {:as :stream})) (io/file tmp))
+        (sh-out "adb" "-s" (:adb transport/*dev*) "install" "-r" tmp)
+        (fs/delete-if-exists tmp)))))
+
+(defstep :termux-api-apk "Termux:API app installed (build matching Termux's signature)"
   :plane :adb
-  :check (installed?))
+  :check (installed?)
+  :apply! (install-apk!))
 
 (defstep :termux-api-permissions "Termux:API holds the runtime permissions its CLI needs"
   :plane :adb
