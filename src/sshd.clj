@@ -3,8 +3,11 @@
   the fleet's authorized keys, sshd supervised by termux-services, and the
   Termux:Boot hook that brings it up after a reboot."
   (:require [engine :refer [defstep]]
-            [transport :refer [ssh ssh-ok? repo-file files-step]]
+            [transport :refer [ssh ssh-ok? repo-file files-step require-pkgs!]]
             [nixos-config]))
+
+;; the package this policy is built on
+(require-pkgs! "termux-services")
 
 (defstep :ssh-host-keys "host keys present"
   :check (ssh-ok? "ls $PREFIX/etc/ssh/ssh_host_*_key >/dev/null 2>&1")

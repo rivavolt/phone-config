@@ -5,9 +5,12 @@
   no firewall to close a 0.0.0.0 bind with). The volt promstack scrapes it over
   the tailnet like the laptops' exporters."
   (:require [engine :refer [defstep]]
-            [transport :refer [ssh ssh-ok? repo-file files-step]]
+            [transport :refer [ssh ssh-ok? repo-file files-step require-pkgs!]]
             [babashka.http-client :as http]
             [cheshire.core :as json]))
+
+;; the package this policy is built on
+(require-pkgs! "termux-services")
 
 (defstep :node-exporter-bin "node_exporter release binary"
   :check (ssh-ok? "command -v node_exporter >/dev/null")

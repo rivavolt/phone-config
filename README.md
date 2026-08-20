@@ -12,7 +12,6 @@ which must work at boot with no host around.
 ```
 ./phone apply  [device]    converge (default: pixel8)
 ./phone verify [device]    check only, exit non-zero on drift
-./phone adopt  [device]    fold the device's manual pkg installs into packages.txt
 ./phone onboard <serial>   first contact over USB adb, then: phone apply
 ```
 
@@ -36,7 +35,6 @@ src/userland.clj            policy: the dev environment (packages, zsh, ui confi
 src/nixos_config.clj        the nixos-config seam: authorized_keys + ssh_config rendered
                             fresh at apply time — never vendored
 src/onboard.clj             USB first-contact flow (runs before ssh exists)
-packages.txt                pkg names, one per line (termux-main + tur-repo)
 sshd_config.d/listen.conf   drop-in for $PREFIX/etc/ssh/sshd_config.d/
 termux-adb-bootstrap        re-pins adbd to TCP 5555 (runs on-device at boot)
 .termux/boot/start-sshd     Termux:Boot hook: supervised sshd
@@ -84,8 +82,8 @@ Phones' own keys are excluded via their `androidDevice` flag.
 
 - No atomic upgrades. `pkg update` mutates in place; no generation to roll
   back to.
-- No version pinning. `packages.txt` lists names only — you always get
-  whatever's current in the Termux repo.
+- No version pinning. Policies declare package names only (`require-pkgs!`) —
+  you always get whatever's current in the Termux repo.
 - No reproducible userland — `$HOME` mutations from interactive use are not
   tracked.
 

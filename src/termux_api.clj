@@ -18,8 +18,11 @@
   until granted) and the doze exemption that keeps the app answering when the
   screen is off."
   (:require [engine :refer [defstep]]
-            [transport :refer [adb]]
+            [transport :refer [adb require-pkgs!]]
             [clojure.string :as str]))
+
+;; the package this policy is built on
+(require-pkgs! "termux-api")
 
 (def ^:private pkg "com.termux.api")
 

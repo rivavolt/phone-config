@@ -95,6 +95,20 @@
                              #(put-settings! rows)
                              when)))
 
+;; ---------------------------------------------------------------- pkg sync
+
+;; Termux packages belong to the policy that needs them — termux-services to
+;; the services supervised with it, termux-api to the app whose CLI it is —
+;; rather than to a packages.txt naming a mechanism. Policies declare theirs at
+;; load time and userland's step installs the union in ONE apt batch, because a
+;; single unservable name aborts the whole transaction.
+(def wanted-pkgs (atom #{}))
+
+(defn require-pkgs!
+  "Declare the Termux packages this policy depends on."
+  [& names]
+  (swap! wanted-pkgs into names))
+
 ;; ---------------------------------------------------------------- file sync
 
 (defn- src-path [src] (str (force src)))

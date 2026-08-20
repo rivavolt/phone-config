@@ -1,20 +1,19 @@
 (ns userland
-  "The dev environment expected in Termux: packages, zsh as login shell, the
-  outbound ssh client config, Termux UI config (font, properties), and the
-  binary-fetched tools no Termux repo serves."
+  "The environment expected in Termux: the packages every policy declared, zsh
+  as login shell, the outbound ssh client config, Termux UI config (font,
+  properties), and the binary-fetched tools no Termux repo serves. The install
+  step runs here because it must precede sshd's service step, which needs
+  termux-services on a fresh device."
   (:require [engine :refer [defstep log]]
             [engine]
-            [transport :refer [repo-file ssh ssh-ok? files-step]]
+            [transport :refer [repo-file ssh ssh-ok? files-step wanted-pkgs]]
             [nixos-config]
             [babashka.fs :as fs]
             [babashka.http-client :as http]
             [cheshire.core :as json]
             [clojure.string :as str]))
 
-(defn wanted-packages []
-  (->> (fs/read-all-lines (repo-file "packages.txt"))
-       (remove #(or (str/blank? %) (str/starts-with? % "#")))
-       set))
+(defn- wanted-packages [] @wanted-pkgs)
 
 (defn- pkg-state
   "Installed + repo-servable package names, one ssh."
@@ -25,7 +24,7 @@
                        (:out (ssh "pkg list-installed 2>/dev/null | tail -n +2 | cut -d/ -f1; echo ===; apt-cache pkgnames"))))]
     {:installed (set installed) :available (set available)}))
 
-(defstep :packages "packages.txt installed"
+(defstep :packages "declared Termux packages installed"
   ;; names the repos no longer serve can never converge — not drift
   :check (let [{:keys [installed available]} (pkg-state)]
            (empty? (filter available (remove installed (wanted-packages)))))
@@ -80,16 +79,3 @@
 (defstep :pnpm "pnpm via npm"
   :check (ssh-ok? "command -v pnpm >/dev/null")
   :apply! (ssh "npm install -g pnpm"))
-
-(defn adopt
-  "Add packages manually installed on the device to packages.txt. Stateless:
-  apply never uninstalls, so this is the only adoptable drift direction;
-  removals are an edit to packages.txt."
-  []
-  (let [manual (set (str/split-lines (:out (ssh "apt-mark showmanual 2>/dev/null"))))
-        new (sort (remove (wanted-packages) manual))]
-    (if (empty? new)
-      (println "packages.txt already covers everything manually installed")
-      (do (spit (repo-file "packages.txt")
-                (str (str/join "\n" (sort (into (wanted-packages) new))) "\n"))
-          (println "adopted:" (str/join " " new))))))

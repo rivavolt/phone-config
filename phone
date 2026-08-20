@@ -7,7 +7,6 @@
 ;;
 ;;   phone apply  [device]   converge (default: pixel8)
 ;;   phone verify [device]   check only, exit non-zero on drift
-;;   phone adopt  [device]   fold the device's manual pkg installs into packages.txt
 ;;   phone onboard <serial>  first contact over USB adb, then: phone apply
 (require '[engine] '[transport] '[nixos-config] '[onboard])
 
@@ -39,9 +38,6 @@
     "onboard"
     (onboard/run (or arg (do (println "usage: phone onboard <adb-serial>") (System/exit 1))))
 
-    "adopt"
-    (with-device arg (fn [_] (userland/adopt)))
-
     ("apply" "verify")
     (with-device arg
       (fn [name]
@@ -55,5 +51,5 @@
             (println fails "step(s) failed/drifted") (System/exit 1))
           (println "converged"))))
 
-    (do (println "usage: phone {apply|verify|adopt} [device] | phone onboard <serial>")
+    (do (println "usage: phone {apply|verify} [device] | phone onboard <serial>")
         (System/exit 1))))
