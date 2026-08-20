@@ -55,14 +55,14 @@
 
 (defstep :termux-api-permissions "Termux:API holds the runtime permissions its CLI needs"
   :plane :adb
-  :check (or (not (installed?))
-             (when-let [g (granted)] (every? g permissions)))
+  :when (installed?)
+  :check (when-let [g (granted)] (every? g permissions))
   :apply! (doseq [p permissions]
             (adb "shell" (str "pm grant " pkg " " p))))
 
 (defstep :termux-api-doze "Termux:API doze-exempt (answers with the screen off)"
   :plane :adb
-  :check (or (not (installed?))
-             (when-let [r (adb "shell" "dumpsys" "deviceidle" "whitelist")]
-               (str/includes? (:out r) pkg)))
+  :when (installed?)
+  :check (when-let [r (adb "shell" "dumpsys" "deviceidle" "whitelist")]
+           (str/includes? (:out r) pkg))
   :apply! (adb "shell" "dumpsys" "deviceidle" "whitelist" (str "+" pkg)))

@@ -121,17 +121,15 @@
 ;; --- steps ------------------------------------------------------------------
 
 (defn- prop-scrub-check []
-  (or (not (trickystore?))
-      (every? (fn [[local dest _]] (= (host-md5 local) (device-md5 dest))) prop-files)))
+  (every? (fn [[local dest _]] (= (host-md5 local) (device-md5 dest))) prop-files))
 
 (defn- prop-scrub-apply! []
   (su (str "mkdir -p " module-dir))
   (doseq [[local dest mode] prop-files] (push-root-file! local dest mode)))
 
 (defn- target-check []
-  (or (not (trickystore?))
-      (let [have (set (str/split-lines (or (su (str "cat " target-txt)) "")))]
-        (every? have targets))))
+  (let [have (set (str/split-lines (or (su (str "cat " target-txt)) "")))]
+    (every? have targets)))
 
 (defn- target-apply! []
   (let [have (set (str/split-lines (or (su (str "cat " target-txt)) "")))
@@ -140,7 +138,7 @@
       (su (str (str/join "; " (map #(str "echo " % " >> " target-txt) missing))
                "; killall keystore2")))))
 
-(defn- keybox-check [] (or (not (trickystore?)) (keybox-usable? (su (str "cat " keybox-path)))))
+(defn- keybox-check [] (keybox-usable? (su (str "cat " keybox-path))))
 
 (defn- keybox-apply! []
   (when-let [local (fetch-keybox!)]
@@ -153,12 +151,12 @@
 
 (engine/step! (engine/step :pixel3-prop-scrub
                            "local-prop-fix module (scrub userdebug + LineageOS props)"
-                           :adb prop-scrub-check prop-scrub-apply!))
+                           :adb prop-scrub-check prop-scrub-apply! trickystore?))
 
 (engine/step! (engine/step :pixel3-tricky-targets
                            "TrickyStore targets (Revolut in generate mode)"
-                           :adb target-check target-apply!))
+                           :adb target-check target-apply! trickystore?))
 
 (engine/step! (engine/step :pixel3-keybox
                            "valid (unexpired) TrickyStore keybox installed"
-                           :adb keybox-check keybox-apply!))
+                           :adb keybox-check keybox-apply! trickystore?))

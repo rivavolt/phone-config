@@ -85,12 +85,15 @@
     (cache-settings! (:out (adb "shell" cmd)))))
 
 (defn settings-step
-  "Register a step converging Android `settings` rows [namespace key value]."
-  [id doc rows]
+  "Register a step converging Android `settings` rows [namespace key value].
+  :when is a thunk guarding applicability, for a row the ROM refuses to honour;
+  it is called at converge time, when the device binding exists."
+  [id doc rows & {:keys [when]}]
   (swap! settings-rows into rows)
   (engine/step! (engine/step id doc :adb
                              #(settings-current? rows)
-                             #(put-settings! rows))))
+                             #(put-settings! rows)
+                             when)))
 
 ;; ---------------------------------------------------------------- file sync
 

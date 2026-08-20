@@ -6,11 +6,21 @@
   wireless-debug port and re-pins adbd to TCP 5555 (the pin dies on every
   reboot — and on some devices on USB unplug), and the Termux:Boot hook that
   re-runs it."
-  (:require [transport :refer [repo-file files-step settings-step]]
+  (:require [transport :refer [repo-file files-step settings-step adb]]
             [babashka.fs :as fs]))
 
+;; Android 11+ wireless debugging is the fallback mechanism, not the fleet's:
+;; where adbd is pinned to a fixed TCP port the phone is already reachable, and
+;; `adb_wifi_enabled` is then a setting the platform holds at 0 no matter who
+;; writes it (it tracks a live pairing session, so a bare `settings put` reads
+;; back unchanged even as root) — an unguarded row there reports FAIL forever
+;; while adb works fine over that very connection.
+(defn- adbd-port-pinned? []
+  (some-> (adb "shell" "getprop persist.adb.tcp.port") :out clojure.string/trim seq boolean))
+
 (settings-step :wireless-debugging "wireless debugging enabled"
-               [["global" "adb_wifi_enabled" "1"]])
+               [["global" "adb_wifi_enabled" "1"]]
+               :when #(not (adbd-port-pinned?)))
 
 (files-step :adb-bootstrap "fleet adb key + bootstrap + boot hook current"
             [[(str (fs/expand-home "~/.android/adbkey"))     "~/.android/adbkey"                "600"]
