@@ -1,4 +1,4 @@
-# termux-setup
+# phone-config
 
 Desired state for the fleet's Android phones, converged from a workstation.
 The phone is a target, not a runtime: `phone` (babashka) drives everything
