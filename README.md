@@ -31,6 +31,8 @@ src/storage.clj             policy: Termux reads shared storage (appop + ~/stora
 src/wireless_adb.clj        policy: adb reachable across reboots (toggle + bootstrap + hook)
 src/termux_boot.clj         policy: boot hooks actually fire (Boot APK + doze exemptions)
 src/sshd.clj                policy: reachable over ssh (keys, config, supervision, hook)
+src/socks_proxy.clj         policy: the fleet can egress through the phone (converges to
+                            down; `<device>-proxy on` runs it)
 src/userland.clj            policy: the dev environment (packages, zsh, ui config, doctl/gcloud/pnpm)
 src/nixos_config.clj        the nixos-config seam: authorized_keys + ssh_config rendered
                             fresh at apply time — never vendored
