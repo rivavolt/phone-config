@@ -67,9 +67,10 @@
 (defn revive-sshd-via-adb!
   "sshd rides the Termux app, so it dies whenever Android kills the app; adbd
   on its fixed port survives that. Fire termux-plane-up through Termux's
-  RunCommandService — the one caller whose SELinux domain may open sockets (a
-  root su lands in the magisk domain, which is denied socket creation) — and
-  wait for sshd to answer. Returns true when ssh came up."
+  RunCommandService — which runs as the real Termux app (uid 10286 with CE
+  storage and its native inet group), the one context sshd can bind and
+  authenticate in; a `su 10286` drops the inet group and can't bind — and wait
+  for sshd to answer. Returns true when ssh came up."
   []
   (when (adb "shell" "am" "startservice" "--user" "0"
              "-n" "com.termux/com.termux.app.RunCommandService"

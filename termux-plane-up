@@ -9,9 +9,12 @@
 # RunCommandService (see <device>-adb restart-ssh) — the durable recovery path,
 # because adbd is pinned to a fixed TCP port that survives both a reboot and the
 # app being killed, while sshd rides the very app that just died. adb must go
-# through RunCommandService rather than a root `su`: a daemon needs the app's
-# untrusted_app SELinux domain to open a listening socket at all, and the magisk
-# domain a `su` drops into is denied socket creation outright.
+# through RunCommandService rather than a root `su 10286`: sshd has to run as the
+# Termux user (uid 10286) for its CE-storage authorized_keys, and `su <uid>`
+# strips the supplementary groups down to that uid alone — dropping gid 3003
+# (inet), which Android's paranoid-network gate requires for a non-root AF_INET
+# bind, so the dropped sshd cannot listen. RunCommandService runs as the real
+# Termux app: uid 10286 with its native inet group and CE storage unlocked.
 set -u
 
 # Every caller's environment differs (Termux:Boot and RunCommandService are not

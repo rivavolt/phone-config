@@ -86,9 +86,20 @@ When adb is down (5555 lost) but ssh is up, recover adb via
 `ssh -p 8022 <device> termux-adb-bootstrap`. When ssh is down but adb is up
 (the common case — Android killed the app mid-uptime), recover ssh via
 `<device>-adb restart-ssh`, which fires termux-plane-up through Termux's
-RunCommandService. It must go through RunCommandService, not `adb shell su`: a
-daemon needs the app's untrusted_app SELinux domain to open a socket, and the
-magisk domain a root `su` drops into is denied socket creation outright.
+RunCommandService.
+
+Why RunCommandService and not `adb shell su -c sshd`: sshd has to run AS the
+Termux user (uid 10286) — its authorized_keys live in that user's CE storage,
+and Termux's sshd has no root-to-user mapping, so a root-launched listener
+rejects the key. `su 10286` doesn't get you there either: `su <uid>` drops the
+supplementary groups down to just that uid, and Android's paranoid-network gate
+denies AF_INET to a non-root process without gid 3003 (inet) — the dropped sshd
+fails with "Cannot bind any address". RunCommandService runs the command as the
+real Termux app, which is the one context that is both uid 10286 AND carries its
+native inet group with CE storage unlocked. (The blocker is the missing inet
+group, not any SELinux domain — `adb shell` here is root in the `su` domain and
+binds fine; a standalone daemon like calld can therefore be launched as root
+and self-drop while keeping inet, no RunCommandService needed.)
 
 ## Adding a device pubkey
 
