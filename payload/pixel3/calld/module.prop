@@ -1,0 +1,6 @@
+id=calld
+name=calld supervisor
+version=v1
+versionCode=1
+author=rivavolt
+description=Supervises the call daemon as root (calld self-drops to uid 2000 keeping audio+inet): restarts on exit with backoff, waits for the tailnet address before start and recycles on change, SIGTERM+grace shutdown. Idle until /data/local/tmp/calld.enabled exists, so installing this is safe.

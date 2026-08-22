@@ -8,18 +8,29 @@
   supervisor can exec it in BFU) and shell-writable (no su hop, unlike the
   /data/adb payloads).
 
-  Only the binary converges from here, and it lands COLD — this step never
-  starts, restarts or signals the daemon. Restarting calld out from under a
-  live call drops the tap mid-conversation and can leave the ADSP mixer routing
-  latched for the next call, so a converge must not touch a running instance;
-  the next start picks up the new binary. Launching and keeping it alive is a
-  separate concern (an on-device supervisor), and its contract is strict: exec
-  `/data/local/tmp/calld serve --port 8790` AS ROOT and let it self-drop to uid
-  2000 keeping gid 1005(audio)+3003(inet) — do not pin a uid or strip groups,
-  or /dev/snd or the AF_INET listener become unreachable — and stop it with
-  SIGTERM, never SIGKILL, so it can revert the mixer on the way out."
+  Two things converge here, on separate tracks. The BINARY lands COLD in
+  /data/local/tmp — this step never starts, restarts or signals the daemon.
+  Restarting calld out from under a live call drops the tap mid-conversation and
+  can leave the ADSP mixer routing latched for the next call, so a converge must
+  not touch a running instance; the supervisor recycles it on a binary-mtime
+  change, so a pushed update takes effect without a signal from here.
+
+  The SUPERVISOR is an APatch/Magisk module in /data/adb/modules/calld (root-
+  owned, so it needs the su hop, unlike the shell-writable binary). It runs as
+  root at boot so calld can self-drop to uid 2000 keeping gid 1005(audio)+
+  3003(inet) — a supervisor that set those itself is how the inet group got lost
+  before, so it doesn't — and stops calld with SIGTERM + grace, never SIGKILL,
+  so the mixer reverts. It waits for the tailnet address before start (calld
+  binds interfaces once and fails closed to loopback-only) and recycles on
+  address change. The scripts are vendored from payload/pixel3/calld because
+  they are static; the binary is built because it is not.
+
+  Installing the module is safe: the supervisor idles until the runtime flag
+  /data/local/tmp/calld.enabled exists, and this converge never creates that
+  flag — enabling calld is a deliberate on-device act, kept out of the desired
+  state so `phone apply` cannot start the daemon while the sound card is in use."
   (:require [engine]
-            [transport :refer [adb sh-out]]
+            [transport :refer [adb sh-out repo-file]]
             [clojure.string :as str]))
 
 ;; built from the pushed flake by default, not the shared ~/dev/call checkout,
@@ -50,4 +61,34 @@
                (fn []
                  (adb "push" @binary dest)
                  (adb "shell" (str "chmod 755 " dest)))
+               call-tap?))
+
+;; --- supervisor module (root-owned, so su-cp not scp) -----------------------
+
+(def ^:private module-dir "/data/adb/modules/calld")
+(def ^:private module-files
+  [[(repo-file "payload/pixel3/calld/module.prop")    (str module-dir "/module.prop")    "644"]
+   [(repo-file "payload/pixel3/calld/service.sh")      (str module-dir "/service.sh")      "755"]
+   [(repo-file "payload/pixel3/calld/calld-supervise") (str module-dir "/calld-supervise") "755"]])
+
+(defn- su [cmd] (some-> (adb "shell" (str "su -c '" cmd "'")) :out))
+(defn- root-md5 [path] (some->> (su (str "md5sum " path " 2>/dev/null")) (re-find #"^\S+")))
+
+(defn- push-root-file!
+  "adb push into shell-writable staging, then su-cp into the root-owned module
+  dir (the scp/ssh file plane cannot reach /data/adb)."
+  [local dest mode]
+  (when (adb "push" local "/data/local/tmp/calld-payload")
+    (su (str "cp /data/local/tmp/calld-payload " dest
+             "; chmod " mode " " dest "; chown root:root " dest
+             "; rm -f /data/local/tmp/calld-payload"))))
+
+(engine/step! (engine/step
+               :calld-supervisor
+               "calld supervisor module in /data/adb/modules/calld (idle until enabled)"
+               :adb
+               (fn [] (every? (fn [[local dest _]] (= (host-md5 local) (root-md5 dest))) module-files))
+               (fn []
+                 (su (str "mkdir -p " module-dir))
+                 (doseq [[local dest mode] module-files] (push-root-file! local dest mode)))
                call-tap?))

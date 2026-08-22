@@ -1,0 +1,125 @@
+#!/system/bin/sh
+# Keep calld alive. Runs as root (calld self-drops to uid 2000 keeping audio +
+# inet); started at boot by whatever boot mechanism call-nixos wires (a Magisk
+# service.sh, an init script). Restarts calld on exit with capped backoff, and
+# stops it with SIGTERM + a grace period so calld reverts the ADSP mixer before
+# dying — a SIGKILL would latch call-audio routing for the next call.
+#
+# Control surface (files in DE storage so they work pre-unlock):
+#   calld.enabled  present  → the loop runs calld; absent → idle (provisioned
+#                            but not fighting the calld agent for the sound card)
+#   calld.stop     present  → the loop exits after the current child stops
+CALLD=${CALLD:-/data/local/tmp/calld}
+PORT=${CALLD_PORT:-8790}
+STATE=${CALLD_STATE:-/data/local/tmp}
+ENABLE="$STATE/calld.enabled"
+STOPFLAG="$STATE/calld.stop"
+LOCK="$STATE/calld-supervise.lock"
+GRACE=${CALLD_GRACE:-2}
+export RUST_LOG="${RUST_LOG:-info}"
+
+log() { echo "$(date '+%F %T') calld-supervise[$$]: $*"; }
+
+# Single supervisor. mkdir is atomic on every filesystem; flock/toybox flock is
+# not guaranteed on Android, so don't depend on it.
+if ! mkdir "$LOCK" 2>/dev/null; then
+  # stale lock from a killed supervisor? adopt it if the recorded pid is gone.
+  oldpid=$(cat "$LOCK/pid" 2>/dev/null)
+  if [ -n "$oldpid" ] && kill -0 "$oldpid" 2>/dev/null; then
+    log "supervisor $oldpid already running, exiting"; exit 0
+  fi
+  log "clearing stale lock (pid ${oldpid:-none})"; rm -f "$LOCK/pid"
+fi
+echo $$ > "$LOCK/pid"
+cleanup() { rm -rf "$LOCK"; }
+
+child=""
+stop_child() {
+  [ -n "$child" ] || return 0
+  kill -0 "$child" 2>/dev/null || return 0
+  log "SIGTERM -> calld ($child), ${GRACE}s grace"
+  kill -TERM "$child" 2>/dev/null
+  i=0
+  while [ "$i" -lt $((GRACE * 10)) ]; do
+    kill -0 "$child" 2>/dev/null || return 0
+    sleep 0.1; i=$((i + 1))
+  done
+  log "calld did not exit in ${GRACE}s, SIGKILL"
+  kill -KILL "$child" 2>/dev/null
+}
+# On our own termination, stop calld gracefully first, then release the lock.
+trap 'stop_child; cleanup; exit 0' TERM INT HUP
+
+# The tailnet address calld would bind, or empty. calld enumerates interfaces
+# once at bind time and fails closed: with no 100.64/10 address it comes up
+# loopback-only (never a wildcard) and STAYS that way for its whole life. So the
+# supervisor both waits for the address before starting AND recycles calld if
+# the address later appears or changes — "after tailscaled started" is not
+# enough, the address itself must be present.
+tun_addr() { ip -4 addr show tun0 2>/dev/null | sed -n 's/.*inet \(100\.[0-9.]*\).*/\1/p' | head -1; }
+bin_mtime() { stat -c %Y "$CALLD" 2>/dev/null; }
+
+wait_for_tailnet() {
+  i=0
+  while [ "$i" -lt 60 ]; do
+    [ -n "$(tun_addr)" ] && return 0
+    sleep 1; i=$((i + 1))
+  done
+  log "tailnet address not up after 60s, starting calld loopback-only (will recycle when it appears)"
+}
+
+backoff=1
+while :; do
+  [ -e "$STOPFLAG" ] && { log "stop flag set, exiting"; break; }
+  if [ ! -e "$ENABLE" ]; then sleep 5; continue; fi
+  if [ ! -x "$CALLD" ]; then log "no executable calld at $CALLD, waiting"; sleep 10; continue; fi
+
+  # Single calld: check the abstract unix socket @calld, which calld binds
+  # unconditionally (even loopback-only), rather than TCP :$PORT which is absent
+  # when the tailnet was down at start. A second instance would EADDRINUSE-exit,
+  # but a restart loop must not race a live one.
+  if ss -xl 2>/dev/null | grep -q '@calld'; then
+    log "@calld already bound — calld already up elsewhere, not starting a second"; sleep 5; continue
+  fi
+
+  wait_for_tailnet
+  start_addr=$(tun_addr)
+  start_mtime=$(bin_mtime)
+  log "starting calld (tailnet=${start_addr:-none}): $CALLD serve --port $PORT"
+  "$CALLD" serve --port "$PORT" &
+  child=$!
+
+  # Supervise by polling so we can react to three things at once: calld exiting,
+  # the tailnet address appearing/changing (needs a re-bind), and the binary
+  # being replaced on disk. The binary deploy is a separate track (a cold
+  # adb-push that never signals the process), so recycling on mtime change is
+  # what makes a pushed update — notably a security fix — actually take effect.
+  reason="exit"
+  while kill -0 "$child" 2>/dev/null; do
+    sleep 5
+    if [ -e "$STOPFLAG" ]; then reason="stop"; break; fi
+    now_addr=$(tun_addr)
+    if [ "$now_addr" != "$start_addr" ]; then
+      log "tailnet address changed (${start_addr:-none} -> ${now_addr:-none}), recycling calld to re-bind"
+      reason="rebind"; break
+    fi
+    if [ "$(bin_mtime)" != "$start_mtime" ]; then
+      log "calld binary changed on disk, recycling to run the new build"
+      reason="rebind"; break
+    fi
+  done
+
+  case "$reason" in
+    exit)
+      wait "$child" 2>/dev/null; rc=$?; child=""
+      log "calld exited rc=$rc"
+      [ -e "$STOPFLAG" ] && { log "stop flag set after exit, done"; break; }
+      if [ "$rc" -eq 0 ]; then backoff=1; else [ "$backoff" -lt 30 ] && backoff=$((backoff * 2)) || backoff=30; fi
+      log "restarting in ${backoff}s"; sleep "$backoff" ;;
+    rebind)
+      stop_child; child=""; backoff=1 ;;   # a re-bind is not a failure
+    stop)
+      stop_child; child=""; log "stop flag set, exiting"; break ;;
+  esac
+done
+cleanup
