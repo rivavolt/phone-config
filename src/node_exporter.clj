@@ -24,12 +24,11 @@
                          (format "https://github.com/prometheus/node_exporter/releases/download/%s/%s.tar.gz" tag dir)
                          dir dir dir))))
 
-(files-step :node-exporter-files "run script + boot hook current"
-            [[(repo-file "services/node_exporter/run")        "$PREFIX/var/service/node_exporter/run"  "755"]
-             [(repo-file ".termux/boot/start-node-exporter")  "~/.termux/boot/start-node-exporter"     "755"]])
+(files-step :node-exporter-files "run script current"
+            [[(repo-file "services/node_exporter/run") "$PREFIX/var/service/node_exporter/run" "755"]])
 
+;; runsvdir bring-up + wake-lock live in termux-plane-up (process-survival); the
+;; boot hook there brings this up after a reboot, so no per-service boot hook.
 (defstep :node-exporter-service "node_exporter supervised by termux-services"
   :check (ssh-ok? "SVDIR=$PREFIX/var/service sv status node_exporter 2>/dev/null | grep -q '^run:'")
-  :apply! (ssh (str "rm -f $PREFIX/var/service/node_exporter/down; "
-                    "pgrep -x runsvdir >/dev/null || setsid sh -c 'SVDIR=$PREFIX/var/service exec runsvdir $PREFIX/var/service' >/dev/null 2>&1 & "
-                    "sleep 2; SVDIR=$PREFIX/var/service sv up node_exporter")))
+  :apply! (ssh "rm -f $PREFIX/var/service/node_exporter/down; termux-plane-up"))

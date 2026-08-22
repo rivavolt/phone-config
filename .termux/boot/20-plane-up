@@ -1,0 +1,4 @@
+#!/data/data/com.termux/files/usr/bin/sh
+# Termux:Boot launches this on device boot. Bring the whole management plane up
+# (wake-lock, runsvdir, supervised services) via the one script that owns it.
+termux-plane-up

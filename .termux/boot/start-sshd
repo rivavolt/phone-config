@@ -1,6 +1,0 @@
-#!/data/data/com.termux/files/usr/bin/bash
-# Termux:Boot launches this on device boot. Bring sshd up via termux-services
-# (which owns the supervised process) instead of forking sshd directly.
-
-termux-wake-lock
-sv up sshd

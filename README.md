@@ -30,7 +30,9 @@ src/wifi_scan_throttle.clj  policy: wi-fi scan throttling off
 src/storage.clj             policy: Termux reads shared storage (appop + ~/storage farm)
 src/wireless_adb.clj        policy: adb reachable across reboots (toggle + bootstrap + hook)
 src/termux_boot.clj         policy: boot hooks actually fire (Boot APK + doze exemptions)
-src/sshd.clj                policy: reachable over ssh (keys, config, supervision, hook)
+src/process_survival.clj    policy: the plane survives reboot AND mid-uptime app kills
+                            (phantom-killer off, adbd port persist, termux-plane-up + hook)
+src/sshd.clj                policy: reachable over ssh (keys, config, supervision)
 src/socks_proxy.clj         policy: the fleet can egress through the phone (converges to
                             down; `<device>-proxy on` runs it)
 src/userland.clj            policy: the dev environment (packages, zsh, ui config, doctl/gcloud/pnpm)
@@ -39,7 +41,9 @@ src/nixos_config.clj        the nixos-config seam: authorized_keys + ssh_config 
 src/onboard.clj             USB first-contact flow (runs before ssh exists)
 sshd_config.d/listen.conf   drop-in for $PREFIX/etc/ssh/sshd_config.d/
 termux-adb-bootstrap        re-pins adbd to TCP 5555 (runs on-device at boot)
-.termux/boot/start-sshd     Termux:Boot hook: supervised sshd
+termux-plane-up             brings the plane up (wake-lock + runsvdir + sv up); one
+                            script, three callers: boot hook, ssh, adb/RunCommandService
+.termux/boot/20-plane-up    Termux:Boot hook: runs termux-plane-up
 ```
 
 Files group by the policy that carries a rationale, never by mechanism —
@@ -73,6 +77,18 @@ sshd included. It is deliberately the last thing onboard does. On some devices
 (Pixel 8) the 5555 bind also dies on USB unplug, not just reboot; recovery
 without a cable is a reboot (Termux:Boot re-runs the bootstrap) or
 `ssh -p 8022 <device> termux-adb-bootstrap`.
+
+Two management planes, each recovering the other, so a single failure never
+strands the phone. adb (adbd pinned to TCP 5555 by `persist.adb.tcp.port`) is
+the durable one: it comes back on its own after a reboot and survives the Termux
+app being killed. ssh rides the Termux app, so it dies whenever the app does.
+When adb is down (5555 lost) but ssh is up, recover adb via
+`ssh -p 8022 <device> termux-adb-bootstrap`. When ssh is down but adb is up
+(the common case — Android killed the app mid-uptime), recover ssh via
+`<device>-adb restart-ssh`, which fires termux-plane-up through Termux's
+RunCommandService. It must go through RunCommandService, not `adb shell su`: a
+daemon needs the app's untrusted_app SELinux domain to open a socket, and the
+magisk domain a root `su` drops into is denied socket creation outright.
 
 ## Adding a device pubkey
 

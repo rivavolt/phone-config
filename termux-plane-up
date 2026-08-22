@@ -1,0 +1,51 @@
+#!/data/data/com.termux/files/usr/bin/sh
+# Bring the Termux management plane up and keep it alive: hold the foreground
+# wake-lock, start runsvdir, and bring up every service termux-services knows
+# about that isn't deliberately down-flagged. Idempotent — safe to re-run.
+#
+# Three callers, because the plane can die three ways. At boot, Termux:Boot runs
+# it after a reboot. During convergence, `phone apply` runs it over ssh. And
+# when the plane is down, a host runs it over adb through Termux's
+# RunCommandService (see <device>-adb restart-ssh) — the durable recovery path,
+# because adbd is pinned to a fixed TCP port that survives both a reboot and the
+# app being killed, while sshd rides the very app that just died. adb must go
+# through RunCommandService rather than a root `su`: a daemon needs the app's
+# untrusted_app SELinux domain to open a listening socket at all, and the magisk
+# domain a `su` drops into is denied socket creation outright.
+set -u
+
+# Every caller's environment differs (Termux:Boot and RunCommandService are not
+# login shells), so pin the paths rather than trust the inherited env. LOGDIR is
+# load-bearing: each service's log/run is termux-services' svlogger, which
+# writes under $LOGDIR/sv/<service> — a runsvdir started without it leaves every
+# log sub-service crash-looping.
+: "${PREFIX:=/data/data/com.termux/files/usr}"
+: "${HOME:=/data/data/com.termux/files/home}"
+export PREFIX HOME
+export PATH="$PREFIX/bin:/system/bin"
+export LD_LIBRARY_PATH="${LD_LIBRARY_PATH:-$PREFIX/lib}"
+export SVDIR="$PREFIX/var/service"
+export LOGDIR="$PREFIX/var/log"
+
+# Foreground wake-lock: promotes the app to a foreground service so Android's
+# low-memory killer deprioritises it, and holds the CPU so supervised daemons
+# keep serving with the screen off. timeout-guarded — the broadcast is quick,
+# but a wedged Termux:API would otherwise block the whole bring-up forever.
+timeout 10 termux-wake-lock 2>/dev/null || true
+
+# runsvdir is the root of the supervision tree that `sv` talks to, so it must
+# exist before any `sv up`. It dies with the app, so re-establish it here; the
+# short settle lets each runsv create its control socket before we poke it.
+if ! pgrep -x runsvdir >/dev/null 2>&1; then
+  setsid runsvdir "$SVDIR" >/dev/null 2>&1 &
+  sleep 3
+fi
+
+# Bring up everything runsvdir supervises except services flagged down (socks
+# converges to down, since running it costs the radio). `sv up` on an already-up
+# service is a no-op, which is what makes re-running safe.
+for svc in "$SVDIR"/*; do
+  [ -d "$svc" ] || continue
+  [ -e "$svc/down" ] && continue
+  sv up "$(basename "$svc")" 2>/dev/null || true
+done

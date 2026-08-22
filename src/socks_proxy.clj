@@ -33,7 +33,8 @@
 
 ;; `sv status` answers for a service runsv has picked up, whether or not it is
 ;; running — which is the state this step owns. Bringing it up is the CLI's job.
+;; termux-plane-up starts runsvdir (which then scans in this service dir); it
+;; won't start socks itself, since the down flag keeps it out of the bring-up.
 (defstep :socks-service "socks proxy registered with termux-services"
   :check (ssh-ok? "SVDIR=$PREFIX/var/service sv status socks >/dev/null 2>&1")
-  :apply! (ssh (str "pgrep -x runsvdir >/dev/null || setsid sh -c 'SVDIR=$PREFIX/var/service exec runsvdir $PREFIX/var/service' >/dev/null 2>&1 & "
-                    "sleep 2; SVDIR=$PREFIX/var/service sv status socks >/dev/null 2>&1")))
+  :apply! (ssh "termux-plane-up; sleep 3; SVDIR=$PREFIX/var/service sv status socks >/dev/null 2>&1"))
