@@ -14,11 +14,15 @@ PORT=${CALLD_PORT:-8790}
 STATE=${CALLD_STATE:-/data/local/tmp}
 ENABLE="$STATE/calld.enabled"
 STOPFLAG="$STATE/calld.stop"
+RESTART="$STATE/calld.restart"
 LOCK="$STATE/calld-supervise.lock"
 GRACE=${CALLD_GRACE:-2}
 export RUST_LOG="${RUST_LOG:-info}"
 
-log() { echo "$(date '+%F %T') calld-supervise[$$]: $*"; }
+# Log to logcat (bounded ring buffer, `logcat -s calld-supervise`) as well as
+# stdout — service.sh discards stdout, so logcat is where the operating trail
+# lives. Full path to the binary so this function doesn't recurse into itself.
+log() { echo "$(date '+%F %T') calld-supervise[$$]: $*"; /system/bin/log -t calld-supervise "$*" 2>/dev/null || true; }
 
 # Single supervisor. mkdir is atomic on every filesystem; flock/toybox flock is
 # not guaranteed on Android, so don't depend on it.
@@ -57,7 +61,6 @@ trap 'stop_child; cleanup; exit 0' TERM INT HUP
 # the address later appears or changes — "after tailscaled started" is not
 # enough, the address itself must be present.
 tun_addr() { ip -4 addr show tun0 2>/dev/null | sed -n 's/.*inet \(100\.[0-9.]*\).*/\1/p' | head -1; }
-bin_mtime() { stat -c %Y "$CALLD" 2>/dev/null; }
 
 wait_for_tailnet() {
   i=0
@@ -84,27 +87,29 @@ while :; do
 
   wait_for_tailnet
   start_addr=$(tun_addr)
-  start_mtime=$(bin_mtime)
   log "starting calld (tailnet=${start_addr:-none}): $CALLD serve --port $PORT"
   "$CALLD" serve --port "$PORT" &
   child=$!
 
   # Supervise by polling so we can react to three things at once: calld exiting,
-  # the tailnet address appearing/changing (needs a re-bind), and the binary
-  # being replaced on disk. The binary deploy is a separate track (a cold
-  # adb-push that never signals the process), so recycling on mtime change is
-  # what makes a pushed update — notably a security fix — actually take effect.
+  # the tailnet address appearing/changing (needs a re-bind), and a restart
+  # signal. The binary deploy is a separate track (a cold adb-push that never
+  # signals the process), and it can't be detected by mtime — every nix-built
+  # calld carries the same epoch-0 store mtime, which adb push preserves — so the
+  # deploy step touches calld.restart after pushing a new build, and that is what
+  # makes an update, notably a security fix, actually take effect. It doubles as
+  # a manual recycle lever.
   reason="exit"
   while kill -0 "$child" 2>/dev/null; do
     sleep 5
     if [ -e "$STOPFLAG" ]; then reason="stop"; break; fi
+    if [ -e "$RESTART" ]; then
+      log "restart flag set (new binary/config), recycling calld"; rm -f "$RESTART"
+      reason="rebind"; break
+    fi
     now_addr=$(tun_addr)
     if [ "$now_addr" != "$start_addr" ]; then
       log "tailnet address changed (${start_addr:-none} -> ${now_addr:-none}), recycling calld to re-bind"
-      reason="rebind"; break
-    fi
-    if [ "$(bin_mtime)" != "$start_mtime" ]; then
-      log "calld binary changed on disk, recycling to run the new build"
       reason="rebind"; break
     fi
   done

@@ -9,11 +9,17 @@
   /data/adb payloads).
 
   Two things converge here, on separate tracks. The BINARY lands COLD in
-  /data/local/tmp — this step never starts, restarts or signals the daemon.
-  Restarting calld out from under a live call drops the tap mid-conversation and
-  can leave the ADSP mixer routing latched for the next call, so a converge must
-  not touch a running instance; the supervisor recycles it on a binary-mtime
-  change, so a pushed update takes effect without a signal from here.
+  /data/local/tmp — this step never starts or restarts the daemon and never
+  signals the process. Restarting calld out from under a live call drops the tap
+  mid-conversation and can leave the ADSP mixer routing latched for the next
+  call, so a converge must not touch a running instance. To make a pushed update
+  (notably a security fix) actually take effect, the step touches
+  /data/local/tmp/calld.restart after a drift push; the supervisor watches that
+  flag and gracefully recycles onto the new binary, then clears it. This is a
+  flag and not an mtime check because every nix-built calld carries the same
+  epoch-0 store mtime and adb push preserves it, so mtime cannot tell builds
+  apart. The touch is harmless when no supervisor is running — a stale flag the
+  next recycle clears.
 
   The SUPERVISOR is an APatch/Magisk module in /data/adb/modules/calld (root-
   owned, so it needs the su hop, unlike the shell-writable binary). It runs as
@@ -60,7 +66,9 @@
                (fn [] (= (host-md5 @binary) (device-md5 dest)))
                (fn []
                  (adb "push" @binary dest)
-                 (adb "shell" (str "chmod 755 " dest)))
+                 ;; signal the supervisor to recycle onto the new binary — mtime
+                 ;; can't, every build shares the store's epoch-0 mtime
+                 (adb "shell" (str "chmod 755 " dest "; touch /data/local/tmp/calld.restart")))
                call-tap?))
 
 ;; --- supervisor module (root-owned, so su-cp not scp) -----------------------
