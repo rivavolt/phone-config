@@ -39,9 +39,15 @@
             [transport :refer [adb sh-out repo-file]]
             [clojure.string :as str]))
 
-;; built from the pushed flake by default, not the shared ~/dev/call checkout,
-;; which may be mid-edit; CALL_FLAKE overrides for local iteration
-(def ^:private flake (or (System/getenv "CALL_FLAKE") "github:rivavolt/call"))
+;; Pinned to the hardware-vetted rev, NOT main HEAD. `phone apply` pushes this
+;; binary cold over whatever is running, with no CI gate and no easy rollback, so
+;; it must be a reviewed build. main has since moved to the in-process voice-agent
+;; rearchitecture (call 459ed4e), which carries recorded blockers — tracking HEAD
+;; would regress a live daemon to a blocked build while reporting a clean
+;; converge. Bump this only to a rev the call daemon owner has vetted (coordinate
+;; with call-deploy). CALL_FLAKE overrides for local iteration.
+(def ^:private flake (or (System/getenv "CALL_FLAKE")
+                         "github:rivavolt/call/0210cfe69cbcd7c921fb97ec942ed8017e938752"))
 (def ^:private dest "/data/local/tmp/calld")
 
 (def ^:private binary
