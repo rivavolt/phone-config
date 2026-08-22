@@ -38,6 +38,8 @@ src/socks_proxy.clj         policy: the fleet can egress through the phone (conv
 src/userland.clj            policy: the dev environment (packages, zsh, ui config, doctl/gcloud/pnpm)
 src/nixos_config.clj        the nixos-config seam: authorized_keys + ssh_config rendered
                             fresh at apply time — never vendored
+src/calld.clj               policy: the call daemon on the phone — deploys the binary
+                            (adb push) + a root supervisor module (see calld supervision)
 src/onboard.clj             USB first-contact flow (runs before ssh exists)
 sshd_config.d/listen.conf   drop-in for $PREFIX/etc/ssh/sshd_config.d/
 termux-adb-bootstrap        re-pins adbd to TCP 5555 (runs on-device at boot)
@@ -136,6 +138,28 @@ caller after a reboot — refused even as root; the activity launch needs none.
 The bind blocker is the missing inet group, not any SELinux domain — `adb shell`
 here is root in the `su` domain and binds fine, so a standalone daemon like
 calld can just launch as root and self-drop keeping inet.)
+
+## calld supervision
+
+The call daemon (`calld`, in `/data/local/tmp`) is a standalone binary, not a
+Termux process: it execs as root and self-drops to uid 2000 keeping gid
+1005(audio)+3003(inet), so it needs neither the Termux app nor RunCommandService.
+Its supervisor is an APatch/Magisk module (`payload/pixel3/calld/`, installed to
+`/data/adb/modules/calld/`) whose `service.sh` runs a restart-with-backoff loop
+at boot; it idles until `/data/local/tmp/calld.enabled` exists, waits for tun0 to
+carry a 100.64/10 address before starting calld (which fails closed to
+loopback-only otherwise), recycles calld if that address later appears or
+changes, stops it with SIGTERM+grace so it reverts the ADSP mixer, and logs to
+logcat (`logcat -s calld-supervise`).
+
+The two tracks — binary (`:calld-binary`) and supervisor module
+(`:calld-supervisor`) — update independently, joined by ONE non-obvious contract:
+after pushing a new binary the deploy step must `touch /data/local/tmp/calld.restart`,
+which the supervisor watches and recycles on. mtime cannot substitute for this:
+every nix build carries the same epoch-0 store mtime and `adb push` preserves it,
+so a supervisor that watched mtime would silently keep running the OLD binary
+after a deploy — a deploy that looks successful while the running system is
+unchanged. The restart flag makes the update actually take effect.
 
 ## Adding a device pubkey
 
