@@ -87,23 +87,34 @@ adb is up (the common case — Android killed the app mid-uptime), recover ssh v
 `<device>-adb restart-ssh`, which fires termux-plane-up through Termux's
 RunCommandService.
 
-A REBOOT of a PIN-locked phone is a one-way trip: no remote plane recovers it
-until a human physically unlocks the device. Measured on the Pixel 3 (FBE +
-lockscreen PIN): after reboot the SIM PIN prompt comes up first, then the device
-keyguard, and Wi-Fi credentials are CE-encrypted so the phone cannot rejoin any
-saved network until first unlock — with the SIM also at its PIN, cellular
-doesn't fill the gap. adbd does come back on 5555 (the persist prop survives),
-and there is a brief window right after boot where the phone is still associated
-and adbd answers on the LAN — but that window CLOSES while the phone is still
-BFU (the Wi-Fi association drops once the CE-backed supplicant config can't be
-read), after which every path — LAN, tailnet, cellular — is "no route to host".
-So do not treat post-reboot adbd as a reachable recovery path: it is reachable
-for tens of seconds, then gone until someone is in the room. The consequence for
-the tooling: anything that might reboot this handset (an OTA, a crash, an OOM of
-a system process, a supervisor doing something drastic) strands it until a human
-is present. Design supervision that never needs a reboot. (A Wi-Fi network the
-device could join pre-unlock — DE-stored, if this build permits it — would be
-the lever that makes BFU adbd durable; unverified.)
+A REBOOT of a PIN-locked phone needs care, but on a ROOTED phone it is NOT a
+one-way trip: given adb access you can unlock it remotely, without ever touching
+the keyguard or the SIM prompt —
+
+    adb ... shell su -c 'locksettings verify --old <DEVICE_PIN>'
+      → "Lock credential verified successfully"
+
+goes through LockSettingsService and unlocks CE storage (BFU → AFU), spending no
+SIM attempt and needing no `input`/`wm dismiss-keyguard`. Use `verify`
+(non-destructive); NEVER `clear`, which destroys the credential. A wrong device
+PIN costs only a timed backoff — unlike the SIM PIN, which PUK-locks after ~3
+tries, so never inject a device PIN into the SIM prompt (`getprop gsm.sim.state`
+= PIN_REQUIRED/PUK_REQUIRED/LOADED distinguishes the two; `mDreamingLockscreen`
+cannot). Measured on the Pixel 3 after a real reboot: `locksettings verify`
+unlocked CE, then tailnet returned at t+10s and sshd (Termux:Boot → 20-plane-up)
+at t+50s — the whole plane recovered on its own.
+
+The real constraint is narrower: you must REACH adbd during BFU, and BFU Wi-Fi
+is intermittent. adbd comes back on 5555 (the persist prop survives) and answers
+on the LAN, but the Wi-Fi association drops and returns while the phone is still
+BFU (CE-encrypted supplicant config), so the recovery window is flaky, not
+absent — adbd was reachable again at 2141s uptime, far past the first ~50s
+window, i.e. availability recurs rather than closing permanently. Retry the LAN
+address until it answers, then `locksettings verify`. Cellular does NOT help
+while the SIM is at its PIN. The durable fix, if wanted, is a DE-stored Wi-Fi
+network the phone can join pre-unlock (unverified on this build). Bottom line:
+still design supervision that never needs a reboot, but a reboot is recoverable
+remotely on this rooted handset — it is not the dead end it first appeared.
 
 Why RunCommandService and not `adb shell su -c sshd`: sshd has to run AS the
 Termux user (uid 10286) — its authorized_keys live in that user's CE storage,
