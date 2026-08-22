@@ -78,15 +78,32 @@ sshd included. It is deliberately the last thing onboard does. On some devices
 without a cable is a reboot (Termux:Boot re-runs the bootstrap) or
 `ssh -p 8022 <device> termux-adb-bootstrap`.
 
-Two management planes, each recovering the other, so a single failure never
-strands the phone. adb (adbd pinned to TCP 5555 by `persist.adb.tcp.port`) is
-the durable one: it comes back on its own after a reboot and survives the Termux
-app being killed. ssh rides the Termux app, so it dies whenever the app does.
-When adb is down (5555 lost) but ssh is up, recover adb via
-`ssh -p 8022 <device> termux-adb-bootstrap`. When ssh is down but adb is up
-(the common case — Android killed the app mid-uptime), recover ssh via
+Two management planes, each recovering the other while the phone stays up. adb
+(adbd pinned to TCP 5555 by `persist.adb.tcp.port`) is the more durable one: it
+survives the Termux app being killed, so it heals ssh. ssh rides the Termux app,
+so it dies whenever the app does. When adb is down (5555 lost) but ssh is up,
+recover adb via `ssh -p 8022 <device> termux-adb-bootstrap`. When ssh is down but
+adb is up (the common case — Android killed the app mid-uptime), recover ssh via
 `<device>-adb restart-ssh`, which fires termux-plane-up through Termux's
 RunCommandService.
+
+A REBOOT of a PIN-locked phone is a one-way trip: no remote plane recovers it
+until a human physically unlocks the device. Measured on the Pixel 3 (FBE +
+lockscreen PIN): after reboot the SIM PIN prompt comes up first, then the device
+keyguard, and Wi-Fi credentials are CE-encrypted so the phone cannot rejoin any
+saved network until first unlock — with the SIM also at its PIN, cellular
+doesn't fill the gap. adbd does come back on 5555 (the persist prop survives),
+and there is a brief window right after boot where the phone is still associated
+and adbd answers on the LAN — but that window CLOSES while the phone is still
+BFU (the Wi-Fi association drops once the CE-backed supplicant config can't be
+read), after which every path — LAN, tailnet, cellular — is "no route to host".
+So do not treat post-reboot adbd as a reachable recovery path: it is reachable
+for tens of seconds, then gone until someone is in the room. The consequence for
+the tooling: anything that might reboot this handset (an OTA, a crash, an OOM of
+a system process, a supervisor doing something drastic) strands it until a human
+is present. Design supervision that never needs a reboot. (A Wi-Fi network the
+device could join pre-unlock — DE-stored, if this build permits it — would be
+the lever that makes BFU adbd durable; unverified.)
 
 Why RunCommandService and not `adb shell su -c sshd`: sshd has to run AS the
 Termux user (uid 10286) — its authorized_keys live in that user's CE storage,
