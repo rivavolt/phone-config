@@ -66,10 +66,11 @@ Plug it in with adb authorized, sign Tailscale in against https://hs.avolt.net
 ```
 
 `onboard` drives Termux through `run-as com.termux` (debug builds are
-debuggable). The Termux:Boot APK fails Play Protect verification over adb, so
-the verifier is toggled off for just that install. The fleet adb client key it
-seeds is already authorized (it authorized over USB), so the wireless-debug
-connect needs no pairing dialog, ever.
+debuggable). Both APKs are debug builds, which Play Protect refuses over adb on
+a stock ROM, so every install runs with the adb-install verifier off and
+restores it afterwards. The fleet adb client key it seeds is already authorized
+(it authorized over USB), so the wireless-debug connect needs no pairing
+dialog, ever.
 
 Ordering trap, learned the hard way: `adb tcpip 5555` restarts adbd, which
 kills anything started via `run-as` over that same transport — a just-started

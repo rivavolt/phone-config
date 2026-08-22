@@ -20,17 +20,25 @@
     (str (first (fs/glob tmp "*.apk")))))
 
 (defn- adb-install
-  "Install an APK over adb. Play Protect blocks some APKs (Termux:Boot) over
-  plain adb install, so the verifier can be toggled for just that install."
-  [a apk & {:keys [verifier-off]}]
-  (when verifier-off (a "shell" "settings" "put" "global" "verifier_verify_adb_installs" "0"))
-  (a "install" "-r" apk)
-  (when verifier-off (a "shell" "settings" "delete" "global" "verifier_verify_adb_installs")))
+  "Install an APK over adb with Play Protect's adb-install verifier off for the
+  duration. Every APK here is a debug build, which the verifier refuses on a
+  stock ROM; the flag is deleted again right after, so a device that would have
+  accepted the install anyway is left exactly as it was."
+  [a apk]
+  (a "shell" "settings" "put" "global" "verifier_verify_adb_installs" "0")
+  (try (a "install" "-r" apk)
+       (finally (a "shell" "settings" "delete" "global" "verifier_verify_adb_installs"))))
 
-(defn- ensure-apk [a pkg gh-repo pattern & opts]
-  (when-not (zero? (:exit (a "shell" "pm" "path" pkg)))
+(defn- installed? [a pkg] (zero? (:exit (a "shell" "pm" "path" pkg))))
+
+(defn- ensure-apk [a pkg gh-repo pattern]
+  (when-not (installed? a pkg)
     (println "== installing" pkg)
-    (apply adb-install a (gh-release-apk gh-repo pattern) opts)))
+    (adb-install a (gh-release-apk gh-repo pattern))
+    ;; a refused install is not always a non-zero adb exit, and the only symptom
+    ;; downstream is a bootstrap wait that never ends — so assert the package landed
+    (when-not (installed? a pkg)
+      (throw (ex-info (str pkg " did not install") {:pkg pkg :repo gh-repo})))))
 
 (defn- tailnet-up? [a] (str/includes? (:out (a "shell" "ip" "-4" "addr")) "inet 100."))
 
@@ -95,7 +103,7 @@
     (println "== device" (:out (a "shell" "getprop" "ro.product.model")))
     (ensure-tailnet a)
     (ensure-apk a "com.termux" "termux/termux-app" "*arm64-v8a.apk")
-    (ensure-apk a "com.termux.boot" "termux/termux-boot" "*.apk" :verifier-off true)
+    (ensure-apk a "com.termux.boot" "termux/termux-boot" "*.apk")
     (a "shell" "am" "start" "-n" "com.termux/.app.TermuxActivity")
     (wait-termux-bootstrap run-as)
     (seed-adb-key run-as)
