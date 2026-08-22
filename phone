@@ -30,7 +30,12 @@
       (println "unknown device:" name) (System/exit 1))
     (binding [transport/*dev* {:ssh name :adb (str name ".tail.avolt.net:5555")}]
       (when-not (transport/ssh-ok? "true")
-        (println "unreachable over ssh:" name) (System/exit 1))
+        ;; a dead sshd is the most likely state this tool is reached for, so
+        ;; revive it over adb rather than telling the operator to
+        (println "ssh down — reviving the Termux plane over adb…")
+        (when-not (transport/revive-sshd-via-adb!)
+          (println "unreachable over ssh:" name "(and adb could not revive it)")
+          (System/exit 1)))
       (f name))))
 
 (let [[cmd arg] *command-line-args*]

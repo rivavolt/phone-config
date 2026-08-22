@@ -45,8 +45,15 @@
 (def ^:private target-up?
   (memoize
    (fn [t]
-     (and (zero? (:exit (sh-out "timeout" "12" "adb" "connect" t)))
-          (zero? (:exit (sh-out "timeout" "10" "adb" "-s" t "shell" "true")))))))
+     (let [up? #(and (zero? (:exit (sh-out "timeout" "12" "adb" "connect" t)))
+                     (zero? (:exit (sh-out "timeout" "10" "adb" "-s" t "shell" "true"))))]
+       (or (up?)
+           ;; the host adb server pins a dead session at "offline" while adbd
+           ;; really listens, and `adb connect` won't retry it; a scoped
+           ;; disconnect un-sticks it (the <device>-adb wrapper escalates to
+           ;; kill-server too, but that drops every device on the host server)
+           (do (sh-out "adb" "disconnect" t)
+               (up?)))))))
 
 (defn adb-plane-up? [] (target-up? (:adb *dev*)))
 
@@ -56,6 +63,20 @@
   (when (adb-plane-up?)
     (let [r (apply sh-out "timeout" "20" "adb" "-s" (:adb *dev*) args)]
       (when (zero? (:exit r)) r))))
+
+(defn revive-sshd-via-adb!
+  "sshd rides the Termux app, so it dies whenever Android kills the app; adbd
+  on its fixed port survives that. Fire termux-plane-up through Termux's
+  RunCommandService — the one caller whose SELinux domain may open sockets (a
+  root su lands in the magisk domain, which is denied socket creation) — and
+  wait for sshd to answer. Returns true when ssh came up."
+  []
+  (when (adb "shell" "am" "startservice" "--user" "0"
+             "-n" "com.termux/com.termux.app.RunCommandService"
+             "-a" "com.termux.RUN_COMMAND"
+             "--es" "com.termux.RUN_COMMAND_PATH" "/data/data/com.termux/files/usr/bin/termux-plane-up"
+             "--ez" "com.termux.RUN_COMMAND_BACKGROUND" "true")
+    (some (fn [_] (Thread/sleep 3000) (ssh-ok? "true")) (range 5))))
 
 ;; ------------------------------------------------------------ settings sync
 
