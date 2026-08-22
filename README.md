@@ -94,6 +94,17 @@ login shell brings up runsvdir (termux-services) and sshd restarts with it.
 adb caller after a reboot — refused even as root — whereas launching the
 activity needs no permission.)
 
+Which plane is the durable one is a property of the device, and on an unrooted
+phone it can invert. `persist.adb.tcp.port` is root-only, so a stock phone keeps
+adb across a reboot solely by the boot hook re-finding the wireless-debug port —
+and that presumes the Wireless Debugging toggle itself survived. Measured on the
+Pixel 2 XL (stock Android 11): after a reboot Tailscale returned on its own and
+sshd came back 49s in via Termux:Boot, but `init.svc.adbd` was `stopped` and
+stayed that way, so adb needed a manual toggle in Developer options while ssh
+never went away. Re-arming it from the device is not possible — `adb_wifi_enabled`
+needs WRITE_SECURE_SETTINGS, which Termux neither holds nor declares. Treat adb
+as the durable plane only where root pins the port.
+
 A REBOOT of a PIN-locked phone needs care, but on a ROOTED phone it is NOT a
 one-way trip: given adb access you can unlock it remotely, without ever touching
 the keyguard or the SIM prompt —

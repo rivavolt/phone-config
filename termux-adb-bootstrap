@@ -47,8 +47,17 @@ if already_on_5555; then
 fi
 
 # Find the current wireless-debug CONNECT port (randomized each boot). Several
-# discovery methods, best-first; the user must have toggled Wireless Debugging on
-# once (it stays on across reboots once enabled).
+# discovery methods, best-first.
+#
+# This needs adbd to be listening at all, which on a device without root means
+# the Wireless Debugging toggle is on. Whether that toggle survives a reboot is
+# per-device, not universal: the Pixel 2 XL on stock Android 11 comes back from
+# a reboot with `init.svc.adbd=stopped` and no wireless-debug port to find, so
+# this scan can only fail until someone re-arms the toggle by hand. Nothing here
+# can fix that from the device — writing `adb_wifi_enabled` needs
+# WRITE_SECURE_SETTINGS, which Termux does not hold and cannot be granted (it
+# does not declare it), and pinning `persist.adb.tcp.port` needs root. On such a
+# phone ssh, not adb, is the plane that survives a reboot.
 #
 # Discovery is the hard part on this device: this Termux adb build's `adb mdns
 # services` is broken, /proc/net/tcp isn't readable by the app uid, and there's
