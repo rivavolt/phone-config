@@ -6,12 +6,15 @@
   termux-services on a fresh device."
   (:require [engine :refer [defstep log]]
             [engine]
-            [transport :refer [repo-file ssh ssh-ok? files-step wanted-pkgs]]
+            [transport :refer [repo-file ssh ssh-ok? files-step wanted-pkgs require-pkgs!]]
             [nixos-config]
             [babashka.fs :as fs]
             [babashka.http-client :as http]
             [cheshire.core :as json]
             [clojure.string :as str]))
+
+;; The shell this makes the login shell, and the runtime pnpm installs onto.
+(require-pkgs! "zsh" "nodejs")
 
 (defn- wanted-packages [] @wanted-pkgs)
 
