@@ -13,8 +13,8 @@
             [cheshire.core :as json]
             [clojure.string :as str]))
 
-;; The shell this makes the login shell, and the runtime pnpm installs onto.
-(require-pkgs! "zsh" "nodejs")
+;; The shell this makes the login shell.
+(require-pkgs! "zsh")
 
 (defn- wanted-packages [] @wanted-pkgs)
 
@@ -78,7 +78,3 @@
                              #(ssh-ok? check)
                              #(ssh (format "cd $TMPDIR && curl -fsSL '%s' -o t.tgz && %s && rm -f t.tgz"
                                            (url) install)))))
-
-(defstep :pnpm "pnpm via npm"
-  :check (ssh-ok? "command -v pnpm >/dev/null")
-  :apply! (ssh "npm install -g pnpm"))

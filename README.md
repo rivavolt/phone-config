@@ -35,7 +35,7 @@ src/process_survival.clj    policy: the plane survives reboot AND mid-uptime app
 src/sshd.clj                policy: reachable over ssh (keys, config, supervision)
 src/socks_proxy.clj         policy: the fleet can egress through the phone (converges to
                             down; `<device>-proxy on` runs it)
-src/userland.clj            policy: the dev environment (packages, zsh, ui config, doctl/gcloud/pnpm)
+src/userland.clj            policy: the dev environment (packages, zsh, ui config, doctl/gcloud)
 src/nixos_config.clj        the nixos-config seam: authorized_keys + ssh_config rendered
                             fresh at apply time — never vendored
 src/calld.clj               policy: the call daemon on the phone — deploys the binary
