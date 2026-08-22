@@ -6,8 +6,12 @@
   wireless-debug port and re-pins adbd to TCP 5555 (the pin dies on every
   reboot — and on some devices on USB unplug), and the Termux:Boot hook that
   re-runs it."
-  (:require [transport :refer [repo-file files-step settings-step adb]]
+  (:require [transport :refer [repo-file files-step settings-step adb require-pkgs!]]
             [babashka.fs :as fs]))
+
+;; termux-adb-bootstrap drives an on-device adb client and finds the randomized
+;; wireless-debug port with a python loopback scan.
+(require-pkgs! "android-tools" "python")
 
 ;; Android 11+ wireless debugging is the fallback mechanism, not the fleet's:
 ;; where adbd is pinned to a fixed TCP port the phone is already reachable, and
