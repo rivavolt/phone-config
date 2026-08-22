@@ -16,20 +16,28 @@ ENABLE="$STATE/calld.enabled"
 STOPFLAG="$STATE/calld.stop"
 RESTART="$STATE/calld.restart"
 LOCK="$STATE/calld-supervise.lock"
+LOGFILE="$STATE/calld-supervise.log"
 GRACE=${CALLD_GRACE:-2}
 export RUST_LOG="${RUST_LOG:-info}"
 
-# Log to logcat (bounded ring buffer, `logcat -s calld-supervise`) as well as
-# stdout — service.sh discards stdout, so logcat is where the operating trail
-# lives. Full path to the binary so this function doesn't recurse into itself.
-log() { echo "$(date '+%F %T') calld-supervise[$$]: $*"; /system/bin/log -t calld-supervise "$*" 2>/dev/null || true; }
+# Every decision is logged three ways: stdout (discarded by service.sh), logcat for live tailing, and $LOGFILE for post-hoc inspection — logcat alone is not a record on this phone, its main buffer rotates in well under an hour under Telecom chatter, so a sparse trail vanishes exactly when someone comes looking. The file is bounded by truncation to its tail. Full path to /system/bin/log so this function doesn't recurse into itself.
+log() {
+  line="$(date '+%F %T') calld-supervise[$$]: $*"
+  echo "$line"
+  echo "$line" >> "$LOGFILE" 2>/dev/null
+  if [ "$(wc -c < "$LOGFILE" 2>/dev/null || echo 0)" -gt 65536 ]; then
+    tail -n 200 "$LOGFILE" > "$LOGFILE.t" 2>/dev/null && mv "$LOGFILE.t" "$LOGFILE"
+  fi
+  /system/bin/log -t calld-supervise "$*" 2>/dev/null || true
+}
 
 # Single supervisor. mkdir is atomic on every filesystem; flock/toybox flock is
-# not guaranteed on Android, so don't depend on it.
+# not guaranteed on Android, so don't depend on it. Liveness of the recorded pid
+# is judged by its cmdline, not bare kill -0 — Android recycles pids fast enough
+# that a stale lock can point at an unrelated live process.
 if ! mkdir "$LOCK" 2>/dev/null; then
-  # stale lock from a killed supervisor? adopt it if the recorded pid is gone.
   oldpid=$(cat "$LOCK/pid" 2>/dev/null)
-  if [ -n "$oldpid" ] && kill -0 "$oldpid" 2>/dev/null; then
+  if [ -n "$oldpid" ] && grep -q calld-supervise "/proc/$oldpid/cmdline" 2>/dev/null; then
     log "supervisor $oldpid already running, exiting"; exit 0
   fi
   log "clearing stale lock (pid ${oldpid:-none})"; rm -f "$LOCK/pid"
@@ -37,30 +45,34 @@ fi
 echo $$ > "$LOCK/pid"
 cleanup() { rm -rf "$LOCK"; }
 
-child=""
-stop_child() {
-  [ -n "$child" ] || return 0
-  kill -0 "$child" 2>/dev/null || return 0
-  log "SIGTERM -> calld ($child), ${GRACE}s grace"
-  kill -TERM "$child" 2>/dev/null
+stop_pid() {
+  [ -n "$1" ] || return 0
+  kill -0 "$1" 2>/dev/null || return 0
+  log "SIGTERM -> calld ($1), ${GRACE}s grace"
+  kill -TERM "$1" 2>/dev/null
   i=0
   while [ "$i" -lt $((GRACE * 10)) ]; do
-    kill -0 "$child" 2>/dev/null || return 0
+    kill -0 "$1" 2>/dev/null || return 0
     sleep 0.1; i=$((i + 1))
   done
-  log "calld did not exit in ${GRACE}s, SIGKILL"
-  kill -KILL "$child" 2>/dev/null
+  log "calld ($1) did not exit in ${GRACE}s, SIGKILL"
+  kill -KILL "$1" 2>/dev/null
 }
+child=""
+stop_child() { stop_pid "$child"; }
 # On our own termination, stop calld gracefully first, then release the lock.
 trap 'stop_child; cleanup; exit 0' TERM INT HUP
 
 # The tailnet address calld would bind, or empty. calld enumerates interfaces
 # once at bind time and fails closed: with no 100.64/10 address it comes up
-# loopback-only (never a wildcard) and STAYS that way for its whole life. So the
-# supervisor both waits for the address before starting AND recycles calld if
-# the address later appears or changes — "after tailscaled started" is not
-# enough, the address itself must be present.
+# loopback-only (never a wildcard) and STAYS that way for its whole life — and
+# its tailnet listener can also die mid-life when the address flaps under it.
+# tun0 specifically: a second tailscaled's interface (tailscale1) must not
+# steer this gate.
 tun_addr() { ip -4 addr show tun0 2>/dev/null | sed -n 's/.*inet \(100\.[0-9.]*\).*/\1/p' | head -1; }
+
+# Whether calld actually serves $1:$PORT now. This, not an address-change edge, is the recycle criterion: comparing the current address against a start-time sample misses any flap that completes between two polls — the interface heals itself while calld's listener stays dead, which is exactly the silent loopback-only outage observed in production (three times in one day on this phone's flapping network). A level check against the listener converges from every such state.
+serving() { ss -ltn 2>/dev/null | grep -qF "$1:$PORT"; }
 
 wait_for_tailnet() {
   i=0
@@ -79,10 +91,15 @@ while :; do
 
   # Single calld: check the abstract unix socket @calld, which calld binds
   # unconditionally (even loopback-only), rather than TCP :$PORT which is absent
-  # when the tailnet was down at start. A second instance would EADDRINUSE-exit,
-  # but a restart loop must not race a live one.
+  # when the tailnet was down at start. A holder that is not our child is an
+  # unsupervised orphan (a supervisor died out from under it): adopt by stopping
+  # it and starting our own — idling here instead would leave it unwatched, with
+  # nothing to recycle it out of a loopback-only bind.
   if ss -xl 2>/dev/null | grep -q '@calld'; then
-    log "@calld already bound — calld already up elsewhere, not starting a second"; sleep 5; continue
+    orphan=$(pidof calld)
+    log "@calld bound by unsupervised calld (pid ${orphan:-unknown}), taking over"
+    stop_pid "$orphan"
+    sleep 1
   fi
 
   wait_for_tailnet
@@ -91,15 +108,16 @@ while :; do
   "$CALLD" serve --port "$PORT" &
   child=$!
 
-  # Supervise by polling so we can react to three things at once: calld exiting,
-  # the tailnet address appearing/changing (needs a re-bind), and a restart
-  # signal. The binary deploy is a separate track (a cold adb-push that never
-  # signals the process), and it can't be detected by mtime — every nix-built
-  # calld carries the same epoch-0 store mtime, which adb push preserves — so the
-  # deploy step touches calld.restart after pushing a new build, and that is what
-  # makes an update, notably a security fix, actually take effect. It doubles as
-  # a manual recycle lever.
+  # Supervise by polling so we can react to four things at once: calld exiting,
+  # calld not serving the tailnet address that is present (needs a re-bind), and
+  # the stop/restart flags. The binary deploy is a separate track (a cold
+  # adb-push that never signals the process), and it can't be detected by mtime
+  # — every nix-built calld carries the same epoch-0 store mtime, which adb push
+  # preserves — so the deploy step touches calld.restart after pushing a new
+  # build, and that is what makes an update, notably a security fix, actually
+  # take effect. It doubles as a manual recycle lever.
   reason="exit"
+  miss=0
   while kill -0 "$child" 2>/dev/null; do
     sleep 5
     if [ -e "$STOPFLAG" ]; then reason="stop"; break; fi
@@ -108,9 +126,13 @@ while :; do
       reason="rebind"; break
     fi
     now_addr=$(tun_addr)
-    if [ "$now_addr" != "$start_addr" ]; then
-      log "tailnet address changed (${start_addr:-none} -> ${now_addr:-none}), recycling calld to re-bind"
-      reason="rebind"; break
+    # Two consecutive strikes before recycling: a single miss can be the race of polling right as a fresh calld is still binding, and one extra 5s beat is cheaper than recycling a healthy daemon. No check while the address is absent — recycling into a tailnet-less start would just produce another loopback-only calld; the strike counter arms when the address is back.
+    if [ -n "$now_addr" ] && ! serving "$now_addr"; then
+      miss=$((miss + 1))
+      log "tailnet address $now_addr present but calld not listening on :$PORT (strike $miss)"
+      if [ "$miss" -ge 2 ]; then reason="rebind"; break; fi
+    else
+      miss=0
     fi
   done
 
