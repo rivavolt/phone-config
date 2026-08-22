@@ -22,15 +22,23 @@
                [["global" "settings_enable_monitor_phantom_procs" "false"]])
 
 ;; device_config is a separate store from `settings`, and it enforces the cap
-;; independently, so raise it there too. adbd's fixed port is a read-only prop
-;; set through a persist. key, which then survives reboots on its own.
-(defstep :adbd-persist-port "adbd fixed port + phantom cap persist across reboot"
+;; independently, so raise it there too.
+(defstep :phantom-cap-persist "phantom cap persists across reboot"
   :plane :adb
-  :check (and (adb "shell" "getprop persist.adb.tcp.port | grep -q 5555")
-              (adb "shell" "device_config get activity_manager max_phantom_processes | grep -q 2147483647"))
-  :apply! (do (adb "shell" "setprop persist.adb.tcp.port 5555")
-              (adb "shell" "device_config put activity_manager max_phantom_processes 2147483647")
+  :check (adb "shell" "device_config get activity_manager max_phantom_processes | grep -q 2147483647")
+  :apply! (do (adb "shell" "device_config put activity_manager max_phantom_processes 2147483647")
               (adb "shell" "device_config set_sync_disabled_for_tests persistent")))
+
+;; adbd's fixed port is a read-only prop set through a persist. key, which then
+;; survives reboots on its own — but writing it needs root, and a stock build
+;; refuses `setprop` from the adb shell. Those devices reach the same place
+;; through the Termux:Boot hook below, which re-runs termux-adb-bootstrap and
+;; re-issues `adb tcpip 5555` after every boot.
+(defstep :adbd-persist-port "adbd fixed port persists across reboot"
+  :plane :adb
+  :when (adb "shell" "su -c id 2>/dev/null | grep -q uid=0")
+  :check (adb "shell" "getprop persist.adb.tcp.port | grep -q 5555")
+  :apply! (adb "shell" "su -c 'setprop persist.adb.tcp.port 5555'"))
 
 (files-step :plane-up "management-plane bring-up script + boot hook current"
             [[(repo-file "termux-plane-up")            "$PREFIX/bin/termux-plane-up"      "755"]
