@@ -3,18 +3,15 @@
 # wake-lock, start runsvdir, and bring up every service termux-services knows
 # about that isn't deliberately down-flagged. Idempotent — safe to re-run.
 #
-# Three callers, because the plane can die three ways. At boot, Termux:Boot runs
-# it after a reboot. During convergence, `phone apply` runs it over ssh. And
-# when the plane is down, a host runs it over adb through Termux's
-# RunCommandService (see <device>-adb restart-ssh) — the durable recovery path,
-# because adbd is pinned to a fixed TCP port that survives both a reboot and the
-# app being killed, while sshd rides the very app that just died. adb must go
-# through RunCommandService rather than a root `su 10286`: sshd has to run as the
-# Termux user (uid 10286) for its CE-storage authorized_keys, and `su <uid>`
-# strips the supplementary groups down to that uid alone — dropping gid 3003
-# (inet), which Android's paranoid-network gate requires for a non-root AF_INET
-# bind, so the dropped sshd cannot listen. RunCommandService runs as the real
-# Termux app: uid 10286 with its native inet group and CE storage unlocked.
+# Two callers: at boot Termux:Boot runs it after a reboot, and `phone apply`
+# runs it over ssh during convergence. (The third recovery path, when the plane
+# is down and only adb is up, does NOT run this script — it launches the Termux
+# activity over adb, whose login shell brings up runsvdir via termux-services;
+# see <device>-adb restart-ssh. That path is used because sshd must run in the
+# Termux app context — uid 10286, its CE-storage authorized_keys, and the native
+# inet group Android's paranoid-network gate requires for a non-root socket bind
+# — which a root `su` cannot provide, and RunCommandService's RUN_COMMAND
+# permission is not reliably held by the adb caller after a reboot.)
 set -u
 
 # Every caller's environment differs (Termux:Boot and RunCommandService are not

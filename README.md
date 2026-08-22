@@ -41,8 +41,9 @@ src/nixos_config.clj        the nixos-config seam: authorized_keys + ssh_config 
 src/onboard.clj             USB first-contact flow (runs before ssh exists)
 sshd_config.d/listen.conf   drop-in for $PREFIX/etc/ssh/sshd_config.d/
 termux-adb-bootstrap        re-pins adbd to TCP 5555 (runs on-device at boot)
-termux-plane-up             brings the plane up (wake-lock + runsvdir + sv up); one
-                            script, three callers: boot hook, ssh, adb/RunCommandService
+termux-plane-up             brings the plane up (wake-lock + runsvdir + sv up); called
+                            by the boot hook and by ssh (adb recovery launches the
+                            Termux activity instead — see restart-ssh)
 .termux/boot/20-plane-up    Termux:Boot hook: runs termux-plane-up
 ```
 
@@ -85,8 +86,11 @@ survives the Termux app being killed, so it heals ssh. ssh rides the Termux app,
 so it dies whenever the app does. When adb is down (5555 lost) but ssh is up,
 recover adb via `ssh -p 8022 <device> termux-adb-bootstrap`. When ssh is down but
 adb is up (the common case — Android killed the app mid-uptime), recover ssh via
-`<device>-adb restart-ssh`, which fires termux-plane-up through Termux's
-RunCommandService.
+`<device>-adb restart-ssh`, which launches the Termux activity over adb — its
+login shell brings up runsvdir (termux-services) and sshd restarts with it.
+(Not RunCommandService: its RUN_COMMAND permission is not reliably held by the
+adb caller after a reboot — refused even as root — whereas launching the
+activity needs no permission.)
 
 A REBOOT of a PIN-locked phone needs care, but on a ROOTED phone it is NOT a
 one-way trip: given adb access you can unlock it remotely, without ever touching
@@ -117,18 +121,21 @@ network the phone can join pre-unlock (unverified on this build). Bottom line:
 still design supervision that never needs a reboot, but a reboot is recoverable
 remotely on this rooted handset — it is not the dead end it first appeared.
 
-Why RunCommandService and not `adb shell su -c sshd`: sshd has to run AS the
-Termux user (uid 10286) — its authorized_keys live in that user's CE storage,
-and Termux's sshd has no root-to-user mapping, so a root-launched listener
-rejects the key. `su 10286` doesn't get you there either: `su <uid>` drops the
-supplementary groups down to just that uid, and Android's paranoid-network gate
-denies AF_INET to a non-root process without gid 3003 (inet) — the dropped sshd
-fails with "Cannot bind any address". RunCommandService runs the command as the
-real Termux app, which is the one context that is both uid 10286 AND carries its
-native inet group with CE storage unlocked. (The blocker is the missing inet
-group, not any SELinux domain — `adb shell` here is root in the `su` domain and
-binds fine; a standalone daemon like calld can therefore be launched as root
-and self-drop while keeping inet, no RunCommandService needed.)
+Why recovery goes through the Termux app (launching its activity) and not
+`adb shell su -c sshd`: sshd has to run AS the Termux user (uid 10286) — its
+authorized_keys live in that user's CE storage, and Termux's sshd has no
+root-to-user mapping, so a root-launched listener rejects the key. `su 10286`
+doesn't get you there either: `su <uid>` drops the supplementary groups down to
+just that uid, and Android's paranoid-network gate denies AF_INET to a non-root
+process without gid 3003 (inet) — the dropped sshd fails with "Cannot bind any
+address". Launching the Termux activity runs everything in the real app: uid
+10286 with its native inet group and CE storage unlocked, which is the one
+context sshd can both bind and authenticate in. (RunCommandService would give
+the same context, but its RUN_COMMAND permission isn't reliably held by the adb
+caller after a reboot — refused even as root; the activity launch needs none.
+The bind blocker is the missing inet group, not any SELinux domain — `adb shell`
+here is root in the `su` domain and binds fine, so a standalone daemon like
+calld can just launch as root and self-drop keeping inet.)
 
 ## Adding a device pubkey
 

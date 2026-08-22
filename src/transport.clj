@@ -65,18 +65,14 @@
       (when (zero? (:exit r)) r))))
 
 (defn revive-sshd-via-adb!
-  "sshd rides the Termux app, so it dies whenever Android kills the app; adbd
-  on its fixed port survives that. Fire termux-plane-up through Termux's
-  RunCommandService — which runs as the real Termux app (uid 10286 with CE
-  storage and its native inet group), the one context sshd can bind and
-  authenticate in; a `su 10286` drops the inet group and can't bind — and wait
-  for sshd to answer. Returns true when ssh came up."
+  "sshd rides the Termux app, so it dies whenever Android kills the app; adbd on
+  its fixed port survives that. Launch the Termux activity over adb — its login
+  shell brings up runsvdir (termux-services), which restarts sshd — then wait
+  for ssh to answer. This is preferred over RunCommandService, whose RUN_COMMAND
+  permission is not reliably held by the adb caller after a reboot (refused even
+  as root). Returns true when ssh came up."
   []
-  (when (adb "shell" "am" "startservice" "--user" "0"
-             "-n" "com.termux/com.termux.app.RunCommandService"
-             "-a" "com.termux.RUN_COMMAND"
-             "--es" "com.termux.RUN_COMMAND_PATH" "/data/data/com.termux/files/usr/bin/termux-plane-up"
-             "--ez" "com.termux.RUN_COMMAND_BACKGROUND" "true")
+  (when (adb "shell" "am" "start" "-n" "com.termux/.app.TermuxActivity")
     (some (fn [_] (Thread/sleep 3000) (ssh-ok? "true")) (range 5))))
 
 ;; ------------------------------------------------------------ settings sync
