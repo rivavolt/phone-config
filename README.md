@@ -94,16 +94,29 @@ login shell brings up runsvdir (termux-services) and sshd restarts with it.
 adb caller after a reboot — refused even as root — whereas launching the
 activity needs no permission.)
 
-Which plane is the durable one is a property of the device, and on an unrooted
-phone it can invert. `persist.adb.tcp.port` is root-only, so a stock phone keeps
-adb across a reboot solely by the boot hook re-finding the wireless-debug port —
-and that presumes the Wireless Debugging toggle itself survived. Measured on the
-Pixel 2 XL (stock Android 11): after a reboot Tailscale returned on its own and
-sshd came back 49s in via Termux:Boot, but `init.svc.adbd` was `stopped` and
-stayed that way, so adb needed a manual toggle in Developer options while ssh
-never went away. Re-arming it from the device is not possible — `adb_wifi_enabled`
-needs WRITE_SECURE_SETTINGS, which Termux neither holds nor declares. Treat adb
+Which plane is the durable one can invert on an unrooted phone.
+`persist.adb.tcp.port` is root-only, so a stock phone keeps adb across a reboot
+solely by the boot hook re-finding the wireless-debug port — and that presumes
+the Wireless Debugging toggle itself survived. Measured on the Pixel 2 XL (stock
+Android 11): after a reboot Tailscale returned on its own and sshd came back 49s
+in via Termux:Boot, but `init.svc.adbd` was `stopped` and stayed that way, so adb
+needed a manual toggle in Developer options while ssh never went away. Treat adb
 as the durable plane only where root pins the port.
+
+How far that generalizes is untested: pixel2 is the only phone here observed
+across a reboot. nothing1 is not a counterexample — it shows `adbd=running` with
+no persist prop, but on 5+ days of uptime, so its toggle was armed by hand and
+never tested against a boot. Settling whether the cause is Android 11, the
+Pixel 2, or unrooted stock in general means deliberately rebooting a stock phone
+and watching `init.svc.adbd`.
+
+Re-arming the toggle from the device is not possible, though not for the reason
+it first appears: Termux DOES declare WRITE_SECURE_SETTINGS and `pm grant` grants
+it. The blocker is the `settings`/`cmd settings` CLI, which refuses any app uid —
+it calls getCurrentUser() (wanting INTERACT_ACROSS_USERS) and `put --user 0`
+wants MANAGE_USERS. Reaching `Settings.Global.putInt` through the API instead of
+the CLI (a dex under `/system/bin/dalvikvm`, running as Termux with the grant)
+is the one route not tried.
 
 A REBOOT of a PIN-locked phone needs care, but on a ROOTED phone it is NOT a
 one-way trip: given adb access you can unlock it remotely, without ever touching
