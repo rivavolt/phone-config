@@ -54,10 +54,19 @@ fi
 # per-device, not universal: the Pixel 2 XL on stock Android 11 comes back from
 # a reboot with `init.svc.adbd=stopped` and no wireless-debug port to find, so
 # this scan can only fail until someone re-arms the toggle by hand. Nothing here
-# can fix that from the device — writing `adb_wifi_enabled` needs
-# WRITE_SECURE_SETTINGS, which Termux does not hold and cannot be granted (it
-# does not declare it), and pinning `persist.adb.tcp.port` needs root. On such a
+# can fix that from the device. Both persist properties that would start adbd at
+# boot (`persist.adb.tcp.port`, `persist.adb.tls_server.enable`) are refused for
+# the shell uid, and while Termux does declare WRITE_SECURE_SETTINGS and can be
+# granted it, the `settings` CLI still refuses an app uid — it calls
+# getCurrentUser(), wanting INTERACT_ACROSS_USERS, and `put --user 0` wants
+# MANAGE_USERS — so the toggle cannot be flipped from here either. On such a
 # phone ssh, not adb, is the plane that survives a reboot.
+#
+# The scan below has also been seen to fail on a phone whose adbd IS running:
+# the Termux-side adb finds the open connect port but does not authenticate
+# against it. Driving `adb connect` + `adb tcpip 5555` from a workstation (find
+# the port with `nmap -p 30000-46000 --open -Pn <lan-ip>`) works where this does
+# not, so prefer that when recovering by hand.
 #
 # Discovery is the hard part on this device: this Termux adb build's `adb mdns
 # services` is broken, /proc/net/tcp isn't readable by the app uid, and there's
